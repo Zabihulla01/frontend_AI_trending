@@ -1,0 +1,135 @@
+export const BINANCE_BASE_URL = "https://api.binance.com/api/v3";
+const VALID_SYMBOL = /^[A-Z0-9]{5,20}$/;
+const VALID_INTERVAL = /^(1m|3m|5m|15m|30m|1h|2h|4h|6h|8h|12h|1d|3d|1w|1M)$/;
+
+export type BinanceKlineResponse = [
+  number,
+  string,
+  string,
+  string,
+  string,
+  string,
+  number,
+  string,
+  number,
+  string,
+  string,
+  string
+];
+
+export interface BinanceSymbolSearchResult {
+  symbol: string;
+  baseAsset: string;
+  quoteAsset: string;
+  status: string;
+}
+
+interface BinanceExchangeInfoResponse {
+  symbols: Array<{
+    symbol: string;
+    status: string;
+    baseAsset: string;
+    quoteAsset: string;
+    isSpotTradingAllowed?: boolean;
+  }>;
+}
+
+export async function fetchBinanceKlines(
+  symbol: string,
+  interval: string,
+  limit = 100
+): Promise<BinanceKlineResponse[]> {
+  const normalizedSymbol = symbol.trim().toUpperCase();
+  const normalizedInterval = interval.trim();
+  const safeLimit = Math.min(Math.max(Math.trunc(limit), 1), 1000);
+
+  if (!VALID_SYMBOL.test(normalizedSymbol)) {
+    throw new Error("Invalid trading symbol");
+  }
+
+  if (!VALID_INTERVAL.test(normalizedInterval)) {
+    throw new Error("Invalid kline interval");
+  }
+
+  const params = new URLSearchParams({
+    symbol: normalizedSymbol,
+    interval: normalizedInterval,
+    limit: String(safeLimit),
+  });
+  const url = `${BINANCE_BASE_URL}/klines?${params.toString()}`;
+  const response = await fetch(url, {
+    headers: { Accept: "application/json" },
+    next: { revalidate: 10 },
+  });
+
+  if (!response.ok) {
+    throw new Error(`Binance request failed with status ${response.status}`);
+  }
+
+  const data = (await response.json()) as unknown;
+
+  if (!Array.isArray(data)) {
+    throw new Error("Unexpected Binance response");
+  }
+
+  return data as BinanceKlineResponse[];
+}
+
+export async function searchBinanceSymbols(
+  query: string,
+  limit = 10
+): Promise<BinanceSymbolSearchResult[]> {
+  const normalizedQuery = query.trim().toUpperCase().replace(/\s+/g, "");
+  const safeLimit = Math.min(Math.max(Math.trunc(limit), 1), 20);
+
+  if (!normalizedQuery) {
+    return [];
+  }
+
+  if (!/^[A-Z0-9]{1,20}$/.test(normalizedQuery)) {
+    return [];
+  }
+
+  const response = await fetch(`${BINANCE_BASE_URL}/exchangeInfo`, {
+    headers: { Accept: "application/json" },
+    next: { revalidate: 60 * 60 },
+  });
+
+  if (!response.ok) {
+    throw new Error(`Binance exchangeInfo failed with status ${response.status}`);
+  }
+
+  const data = (await response.json()) as BinanceExchangeInfoResponse;
+
+  if (!Array.isArray(data.symbols)) {
+    throw new Error("Unexpected Binance exchangeInfo response");
+  }
+
+  return data.symbols
+    .filter((item) => {
+      const isTrading = item.status === "TRADING";
+      const isSpot = item.isSpotTradingAllowed !== false;
+      const isUsdtPair = item.quoteAsset === "USDT";
+      const matchesBase = item.baseAsset.startsWith(normalizedQuery);
+      const matchesSymbol = item.symbol.includes(normalizedQuery);
+
+      return isTrading && isSpot && isUsdtPair && (matchesBase || matchesSymbol);
+    })
+    .sort((a, b) => {
+      const aExact = a.baseAsset === normalizedQuery || a.symbol === normalizedQuery;
+      const bExact = b.baseAsset === normalizedQuery || b.symbol === normalizedQuery;
+
+      if (aExact !== bExact) {
+        return aExact ? -1 : 1;
+      }
+
+      return a.symbol.localeCompare(b.symbol);
+    })
+    .slice(0, safeLimit)
+    .map((item) => ({
+      symbol: item.symbol,
+      baseAsset: item.baseAsset,
+      quoteAsset: item.quoteAsset,
+      status: item.status,
+    }));
+}
