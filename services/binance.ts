@@ -24,6 +24,16 @@ export interface BinanceSymbolSearchResult {
   status: string;
 }
 
+export function isBinanceKlineClosed(kline: BinanceKlineResponse, now = Date.now()) {
+  const closeTime = Number(kline[6]);
+
+  return Number.isFinite(closeTime) && closeTime < now;
+}
+
+export function getClosedBinanceKlines(klines: BinanceKlineResponse[], now = Date.now()) {
+  return klines.slice(0, -1).filter((kline) => isBinanceKlineClosed(kline, now));
+}
+
 interface BinanceExchangeInfoResponse {
   symbols: Array<{
     symbol: string;

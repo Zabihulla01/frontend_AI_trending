@@ -1,38 +1,61 @@
-import Header from "@/components/layout/Header";
-import TradingChart from "@/components/chart/TradingChart";
-import Watchlist from "@/components/watchlist/Watchlist";
 import AIAnalysis from "@/components/analysis/AIAnalysis";
-import AlertPanel from "@/components/alerts/AlertPanel";
-import RiskCalculator from "@/components/risk/RiskCalculator";
+import { CompactAIPanel } from "@/components/analysis/CompactAIPanel";
+import TradingChart from "@/components/chart/TradingChart";
+import ChartContainer from "@/components/layout/ChartContainer";
+import Header from "@/components/layout/Header";
+import { MarketSummary } from "@/components/layout/MarketSummary";
+import MarketStatsRow from "@/components/layout/MarketStatsRow";
+import { NewsTab } from "@/components/layout/NewsTab";
+import TradeSetupPanel from "@/components/layout/TradeSetupPanel";
+import Watchlist from "@/components/watchlist/Watchlist";
+import styles from "./page.module.css";
 
 export default function Home() {
   return (
-    <main className="min-h-screen bg-[#020617] text-white">
-      <div className="mx-auto flex min-h-screen max-w-7xl flex-col gap-8 px-4 py-6 sm:px-6 lg:px-8">
-        <Header />
-        <section className="rounded-3xl border border-slate-800 bg-slate-950/90 p-6 shadow-2xl shadow-slate-900/40">
-          <div className="mb-6 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
-            <div>
-              <p className="text-sm uppercase tracking-[0.25em] text-slate-500">Trading dashboard</p>
-              <h1 className="mt-2 text-3xl font-semibold text-white sm:text-4xl">
-                Live candlestick chart
-              </h1>
-            </div>
-            <p className="max-w-xl text-sm leading-6 text-slate-400">
-              Select a symbol and interval, then apply the settings to refresh the chart.
-            </p>
+    <main className={styles.dashboard}>
+      <Header />
+
+      <div className={styles.workspace}>
+        <section className={styles.leftColumn} aria-label="Market chart and news">
+          <div className={styles.chartPanel}>
+            <ChartContainer>
+              <TradingChart />
+            </ChartContainer>
           </div>
-          <div className="grid gap-6 lg:grid-cols-[320px_minmax(0,1fr)]">
-            <div className="space-y-6">
-              <Watchlist />
-              <AlertPanel />
-              <RiskCalculator />
-              <AIAnalysis />
+
+          <MarketStatsRow />
+
+          <section className={styles.panel}>
+            <PanelHeading title="News Feed" />
+            <div className={styles.newsViewport}>
+              <NewsTab />
             </div>
-            <TradingChart />
-          </div>
+          </section>
         </section>
+
+        <aside className={styles.centerColumn} aria-label="Trade setup">
+          <TradeSetupPanel />
+        </aside>
+
+        <aside className={styles.rightColumn} aria-label="Analysis and watchlist">
+          <AIAnalysis headless />
+          <section className={styles.panel}>
+            <CompactAIPanel />
+          </section>
+          <section className={styles.panel}>
+            <Watchlist />
+          </section>
+          <MarketSummary />
+        </aside>
       </div>
     </main>
+  );
+}
+
+function PanelHeading({ title }: { title: string }) {
+  return (
+    <header className={styles.panelHeading}>
+      <h2>{title}</h2>
+    </header>
   );
 }

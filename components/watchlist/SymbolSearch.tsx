@@ -138,12 +138,7 @@ export default function SymbolSearch() {
 
   return (
     <div className="relative">
-      <label
-        htmlFor="symbol-search"
-        className="mb-2 block text-xs font-medium uppercase tracking-[0.22em] text-slate-500"
-      >
-        Symbol search
-      </label>
+      <label htmlFor="symbol-search" className="sr-only">Search symbols</label>
       <input
         ref={inputRef}
         id="symbol-search"
@@ -152,9 +147,9 @@ export default function SymbolSearch() {
         onChange={handleChange}
         onFocus={() => query.trim() && setIsOpen(true)}
         onKeyDown={handleKeyDown}
-        placeholder="Search BTC, ETH, SOL..."
+        placeholder="Search symbols..."
         autoComplete="off"
-        className="w-full rounded-lg border border-slate-700 bg-slate-900 px-3 py-2.5 text-sm font-medium text-white outline-none transition placeholder:text-slate-500 focus:border-emerald-400 focus:ring-2 focus:ring-emerald-400/20"
+        className="h-10 w-full rounded-md border border-slate-700 bg-[#020617] px-3 text-xs font-medium text-white outline-none transition placeholder:text-slate-500 focus:border-blue-400 focus:ring-2 focus:ring-blue-400/20"
         role="combobox"
         aria-autocomplete="list"
         aria-expanded={showDropdown}

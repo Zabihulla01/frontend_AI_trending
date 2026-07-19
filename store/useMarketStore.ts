@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import { createJSONStorage, persist } from "zustand/middleware";
 
 const DEFAULT_WATCHLIST = ["BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "XRPUSDT"];
 const VALID_SYMBOL = /^[A-Z0-9]{3,20}$/;
@@ -19,7 +20,9 @@ function normalizeSymbol(symbol: string) {
   return symbol.trim().toUpperCase().replace(/\s+/g, "");
 }
 
-export const useMarketStore = create<MarketState>((set) => ({
+export const useMarketStore = create<MarketState>()(
+  persist(
+    (set) => ({
   symbol: "BTCUSDT",
   interval: "1h",
   watchlist: DEFAULT_WATCHLIST,
@@ -87,4 +90,15 @@ export const useMarketStore = create<MarketState>((set) => ({
       validSymbols: Array.from(new Set([...state.validSymbols, ...normalizedSymbols])),
     }));
   },
-}));
+    }),
+    {
+      name: "ai-trader-market",
+      storage: createJSONStorage(() => localStorage),
+      partialize: (state) => ({
+        symbol: state.symbol,
+        interval: state.interval,
+        watchlist: state.watchlist,
+      }),
+    }
+  )
+);

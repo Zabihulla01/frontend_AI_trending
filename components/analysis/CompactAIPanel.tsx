@@ -1,0 +1,112 @@
+"use client";
+
+import { useAnalysisStore } from "@/store/useAnalysisStore";
+
+function signalTone(signal: string) {
+  if (signal.includes("Buy") || signal === "Bullish" || signal === "Bull") return "text-emerald-400";
+  if (signal.includes("Sell") || signal === "Bearish" || signal === "Bear") return "text-red-400";
+  return "text-amber-300";
+}
+
+function actionTone(action: string) {
+  if (action === "Long") return "border-emerald-500/35 bg-emerald-500/10 text-emerald-300";
+  if (action === "Short") return "border-red-500/35 bg-red-500/10 text-red-300";
+  return "border-amber-400/30 bg-amber-400/10 text-amber-300";
+}
+
+function displayActionText(action: string, suggestedAction: string) {
+  if (action === "Wait") {
+    return suggestedAction.toUpperCase().startsWith("WAIT:") ? suggestedAction : `WAIT: ${suggestedAction}`;
+  }
+
+  return suggestedAction;
+}
+
+export const CompactAIPanel = () => {
+  const results = useAnalysisStore((state) => state.results);
+  const status = useAnalysisStore((state) => state.status);
+  const analysis = Object.values(results).find((result) => result !== undefined);
+
+  if (!analysis) {
+    return (
+      <section className="rounded-md border border-slate-800 bg-[#050b1b] p-3 text-xs text-slate-400">
+        <p className="uppercase tracking-[0.18em] text-slate-500">AI Analysis</p>
+        <p className="mt-3">{status === "loading" ? "Analyzing market..." : "Waiting for market data..."}</p>
+      </section>
+    );
+  }
+
+  const reasoning = analysis.reasons.length > 0 ? analysis.reasons : [analysis.suggestedAction];
+  const actionText = displayActionText(analysis.action, analysis.suggestedAction);
+
+  return (
+    <section className="text-xs">
+      <header className="mb-2 flex items-center justify-between">
+        <p className="uppercase tracking-[0.18em] text-slate-400">AI Analysis</p>
+        <span className={`rounded bg-slate-900 px-2 py-1 text-[10px] font-semibold uppercase ${signalTone(analysis.trend)}`}>
+          {analysis.trend}
+        </span>
+      </header>
+
+      <div className={`mb-2 flex items-center justify-between rounded-md border px-3 py-2 ${actionTone(analysis.action)}`}>
+        <div>
+          <p className="text-[10px] uppercase tracking-[0.14em] opacity-70">Action</p>
+          <p className="mt-0.5 text-sm font-semibold leading-5">{actionText}</p>
+        </div>
+        <div className="text-right">
+          <p className="text-[10px] uppercase tracking-[0.14em] opacity-70">Signal</p>
+          <p className={`mt-0.5 font-bold ${signalTone(analysis.signal)}`}>{analysis.signal}</p>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-3 gap-1.5">
+        <Metric label="Confidence" value={`${analysis.confidence}%`} tone="text-blue-400" />
+        <Metric label="Trend" value={analysis.trend} tone={signalTone(analysis.trend)} />
+        <Metric label="Risk" value={analysis.risk} tone={analysis.risk === "High" ? "text-red-400" : "text-amber-300"} />
+        <Metric label="Strength" value={`${analysis.trendStrength}%`} />
+        <Metric label="Probability" value={`${analysis.probability}%`} tone="text-blue-400" />
+        <Metric label="Market" value={analysis.marketCondition} tone={signalTone(analysis.marketCondition)} />
+      </div>
+
+      <div className="mt-2 space-y-2 rounded-md border border-slate-800 bg-[#071022] p-2">
+        <ScoreBar label="Entry Quality" value={analysis.entryQuality} tone="bg-emerald-500" />
+        <ScoreBar label="Trade Quality" value={analysis.tradeQuality} tone="bg-blue-500" />
+      </div>
+
+      <div className="mt-2 rounded-md border border-slate-800 bg-[#071022] p-2">
+        <p className="mb-1 text-[10px] uppercase tracking-[0.15em] text-slate-500">Reasoning</p>
+        <ul className="space-y-1 text-[11px] leading-4 text-slate-300">
+          {reasoning.slice(0, 3).map((reason) => (
+            <li key={reason} className="flex gap-1.5">
+              <span className={analysis.action === "Wait" ? "text-amber-300" : "text-emerald-400"}>-</span>
+              <span>{reason}</span>
+            </li>
+          ))}
+        </ul>
+      </div>
+    </section>
+  );
+};
+
+function Metric({ label, value, tone = "text-white" }: { label: string; value: string; tone?: string }) {
+  return (
+    <div className="min-w-0 rounded-md border border-slate-800 bg-[#071022] p-2">
+      <p className="truncate text-[10px] text-slate-500">{label}</p>
+      <p className={`mt-0.5 truncate font-semibold ${tone}`}>{value}</p>
+    </div>
+  );
+}
+
+function ScoreBar({ label, value, tone }: { label: string; value: number; tone: string }) {
+  return (
+    <div>
+      <div className="mb-1 flex justify-between text-[10px]">
+        <span className="text-slate-400">{label}</span>
+        <span className="font-semibold text-white">{value}%</span>
+      </div>
+      <div className="h-1.5 overflow-hidden rounded-full bg-slate-800">
+        <div className={`h-full rounded-full ${tone}`} style={{ width: `${Math.max(0, Math.min(100, value))}%` }} />
+      </div>
+    </div>
+  );
+}

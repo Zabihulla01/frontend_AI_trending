@@ -1,38 +1,52 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type {
   CandlestickData,
   IChartApi,
+  IPriceLine,
   ISeriesApi,
   LineData,
   UTCTimestamp,
 } from "lightweight-charts";
-import type { BinanceKlineResponse } from "@/services/binance";
-import { calculateRsi, calculateSma, getLatestValue } from "@/services/indicators";
+import { getClosedBinanceKlines, type BinanceKlineResponse } from "@/services/binance";
+import {
+  calculateAdx,
+  calculateAtr,
+  calculateEma,
+  calculateIndicatorSnapshot,
+  calculateMacd,
+  calculateRsi,
+  calculateSma,
+  calculateVwap,
+  getLatestMacd,
+  getLatestValue,
+} from "@/services/indicators";
 import { createBinanceKlineSocket } from "@/services/websocket";
+import { useIndicatorStore } from "@/store/useIndicatorStore";
 import { useMarketStore } from "@/store/useMarketStore";
+import { formatRiskInput, parseRiskNumber, useRiskStore } from "@/store/useRiskStore";
+import { useTradeStore } from "@/store/useTradeStore";
 
-type CandlePoint = CandlestickData<UTCTimestamp>;
+type CandlePoint = CandlestickData<UTCTimestamp> & { volume: number };
 type LinePoint = LineData<UTCTimestamp>;
+type PositionSide = "long" | "short";
+type PositionLevelKey = "entry" | "stop" | "takeProfit";
+type PositionLevels = Record<PositionLevelKey, number | null>;
 
-const PRICE_CHART_HEIGHT = 440;
-const RSI_CHART_HEIGHT = 180;
+const PRICE_CHART_HEIGHT = 540;
+const RSI_CHART_HEIGHT = 88;
 const MIN_CHART_WIDTH = 320;
 const HISTORY_LIMIT = 240;
 const MIN_VISIBLE_BARS = 72;
 const MAX_VISIBLE_BARS = 140;
-const TARGET_BAR_WIDTH = 8;
+const TARGET_BAR_WIDTH = 9;
 const RIGHT_PADDING_BARS = 6;
+const CENTER_PADDING_BARS = 24;
+const LIVE_UPDATE_MS = 2500;
 
-function formatValue(value: number | null, maximumFractionDigits = 2) {
-  if (value === null || !Number.isFinite(value)) {
-    return "--";
-  }
-
-  return new Intl.NumberFormat("en-US", {
-    maximumFractionDigits,
-  }).format(value);
+function clamp(value: number, min: number, max: number) {
+  return Math.min(Math.max(value, min), max);
 }
 
 function parseKline(kline: BinanceKlineResponse): CandlePoint | null {
@@ -42,6 +56,7 @@ function parseKline(kline: BinanceKlineResponse): CandlePoint | null {
     high: Number(kline[2]),
     low: Number(kline[3]),
     close: Number(kline[4]),
+    volume: Number(kline[5]),
   };
 
   const isValid =
@@ -49,7 +64,8 @@ function parseKline(kline: BinanceKlineResponse): CandlePoint | null {
     Number.isFinite(candle.open) &&
     Number.isFinite(candle.high) &&
     Number.isFinite(candle.low) &&
-    Number.isFinite(candle.close);
+    Number.isFinite(candle.close) &&
+    Number.isFinite(candle.volume);
 
   return isValid ? candle : null;
 }
@@ -80,7 +96,44 @@ function toLineData(points: Array<{ time: number; value: number }>): LinePoint[]
   }));
 }
 
-export default function TradingChart() {
+function formatNumber(value: number | null | undefined, maximumFractionDigits = 2) {
+  if (value === null || value === undefined || !Number.isFinite(value)) {
+    return "--";
+  }
+
+  return new Intl.NumberFormat("en-US", {
+    maximumFractionDigits,
+  }).format(value);
+}
+
+function calculateRiskReward(levels: PositionLevels) {
+  const { entry, stop, takeProfit } = levels;
+
+  if (entry === null || stop === null || takeProfit === null) {
+    return null;
+  }
+
+  const risk = Math.abs(entry - stop);
+  const reward = Math.abs(takeProfit - entry);
+
+  return risk > 0 ? reward / risk : null;
+}
+
+function intervalToMs(interval: string) {
+  const value = Number.parseInt(interval, 10);
+
+  if (!Number.isFinite(value)) {
+    return 60_000;
+  }
+
+  if (interval.endsWith("m")) return value * 60_000;
+  if (interval.endsWith("h")) return value * 60 * 60_000;
+  if (interval.endsWith("d")) return value * 24 * 60 * 60_000;
+
+  return 60_000;
+}
+
+function TradingChart() {
   const symbol = useMarketStore((state) => state.symbol);
   const interval = useMarketStore((state) => state.interval);
   const priceChartContainerRef = useRef<HTMLDivElement | null>(null);
@@ -88,10 +141,20 @@ export default function TradingChart() {
   const priceChartRef = useRef<IChartApi | null>(null);
   const rsiChartRef = useRef<IChartApi | null>(null);
   const candleSeriesRef = useRef<ISeriesApi<"Candlestick"> | null>(null);
+  const positionPriceLinesRef = useRef<IPriceLine[]>([]);
   const sma20SeriesRef = useRef<ISeriesApi<"Line"> | null>(null);
   const sma50SeriesRef = useRef<ISeriesApi<"Line"> | null>(null);
   const rsiSeriesRef = useRef<ISeriesApi<"Line"> | null>(null);
+  const candlesRef = useRef<CandlePoint[]>([]);
+  const closedCandlesRef = useRef<CandlePoint[]>([]);
+  const pendingLiveCandleRef = useRef<CandlePoint | null>(null);
+  const pendingClosedCandleRef = useRef<CandlePoint | null>(null);
+  const liveUpdateTimerRef = useRef<number | null>(null);
+  const hasLoadedInitialRangeRef = useRef(false);
+  const pendingRiskSyncRef = useRef(false);
+  const planResetKeyRef = useRef<string | null>(null);
   const [candles, setCandles] = useState<CandlePoint[]>([]);
+  const [closedCandles, setClosedCandles] = useState<CandlePoint[]>([]);
   const [isChartReady, setIsChartReady] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
   const [isLive, setIsLive] = useState(false);
@@ -100,32 +163,137 @@ export default function TradingChart() {
   const [showSma20, setShowSma20] = useState(true);
   const [showSma50, setShowSma50] = useState(true);
   const [showRsi, setShowRsi] = useState(true);
+  const [positionSide, setPositionSide] = useState<PositionSide>("long");
+  const [positionLevels, setPositionLevels] = useState<PositionLevels>({
+    entry: null,
+    stop: null,
+    takeProfit: null,
+  });
+  const setIndicatorSnapshot = useIndicatorStore((state) => state.setSnapshot);
+  const updateRiskInput = useRiskStore((state) => state.updateInput);
+  const riskEntryPrice = useRiskStore((state) => state.entryPrice);
+  const riskStopLoss = useRiskStore((state) => state.stopLoss);
+  const riskTakeProfit = useRiskStore((state) => state.takeProfit);
+  const riskAction = useRiskStore((state) => state.action);
+  const activeTrade = useTradeStore((state) => state.activeTrade);
+  const closeTrade = useTradeStore((state) => state.closeTrade);
+  const tickTradeAge = useTradeStore((state) => state.tickTradeAge);
 
   const indicators = useMemo(() => {
-    const indicatorCandles = candles.map((candle) => ({
+    const indicatorCandles = closedCandles.map((candle) => ({
       time: Number(candle.time),
       close: candle.close,
     }));
+    const ohlcvCandles = closedCandles.map((candle) => ({
+      time: Number(candle.time),
+      open: candle.open,
+      high: candle.high,
+      low: candle.low,
+      close: candle.close,
+      volume: candle.volume,
+    }));
     const sma20 = calculateSma(indicatorCandles, 20);
     const sma50 = calculateSma(indicatorCandles, 50);
+    const ema20 = calculateEma(indicatorCandles, 20);
+    const ema50 = calculateEma(indicatorCandles, 50);
     const rsi = calculateRsi(indicatorCandles, 14);
+    const macd = calculateMacd(indicatorCandles);
+    const atr = calculateAtr(ohlcvCandles, 14);
+    const adx = calculateAdx(ohlcvCandles, 14);
+    const vwap = calculateVwap(ohlcvCandles);
+    const snapshot = closedCandles.length > 0 ? calculateIndicatorSnapshot(ohlcvCandles) : null;
 
-    return {
+    const result = {
       sma20,
       sma50,
+      ema20,
+      ema50,
       rsi,
+      macd,
+      atr,
+      adx,
+      vwap,
+      snapshot,
       latestSma20: getLatestValue(sma20),
       latestSma50: getLatestValue(sma50),
+      latestEma20: getLatestValue(ema20),
+      latestEma50: getLatestValue(ema50),
       latestRsi: getLatestValue(rsi),
-      latestClose: candles.length > 0 ? candles[candles.length - 1].close : null,
+      latestMacd: getLatestMacd(macd),
+      latestAtr: getLatestValue(atr),
+      latestAdx: getLatestValue(adx),
+      latestVwap: getLatestValue(vwap),
+      latestClose: closedCandles.length > 0 ? closedCandles[closedCandles.length - 1].close : null,
     };
-  }, [candles]);
 
-  const fitChartContent = useCallback(() => {
-    priceChartRef.current?.timeScale().fitContent();
-    rsiChartRef.current?.timeScale().fitContent();
-  }, []);
+    return result;
+  }, [closedCandles]);
 
+  const positionRiskReward = useMemo(() => calculateRiskReward(positionLevels), [positionLevels]);
+  const latestPrice = indicators.latestClose;
+  const latestAdx = indicators.latestAdx;
+  const volumeSpike = indicators.snapshot?.volumeSpike;
+  const tradeMetrics = useMemo(() => {
+    if (!activeTrade || latestPrice === null) {
+      return null;
+    }
+
+    const directionMultiplier = activeTrade.direction === "LONG" ? 1 : -1;
+    const pnl = (latestPrice - activeTrade.entry) * directionMultiplier;
+    const distanceTp = Math.abs(activeTrade.takeProfit - latestPrice);
+    const distanceSl = Math.abs(latestPrice - activeTrade.stopLoss);
+    const expectedReward = Math.abs(activeTrade.takeProfit - activeTrade.entry);
+    const riskAmount = Math.abs(activeTrade.entry - activeTrade.stopLoss);
+    const marketHealth =
+      volumeSpike !== undefined && latestAdx !== null
+        ? Math.round(Math.min(100, volumeSpike * 18 + latestAdx * 1.8))
+        : activeTrade.confidence;
+    const tradeQuality = Math.round(Math.min(100, activeTrade.confidence * 0.7 + Math.min(activeTrade.rr / 3, 1) * 30));
+
+    return { pnl, distanceTp, distanceSl, expectedReward, riskAmount, marketHealth, tradeQuality };
+  }, [activeTrade, latestAdx, latestPrice, volumeSpike]);
+  const applyLatestVisibleRange = useCallback(
+    (options: { fitContent?: boolean; scrollToRealTime?: boolean } = {}) => {
+      const priceChart = priceChartRef.current;
+      const rsiChart = rsiChartRef.current;
+      const candleCount = candlesRef.current.length;
+
+      if (!priceChart || candleCount === 0) {
+        return;
+      }
+
+      const chartWidth = Math.max(priceChartContainerRef.current?.clientWidth ?? MIN_CHART_WIDTH, MIN_CHART_WIDTH);
+      const visibleBars = clamp(Math.round(chartWidth / TARGET_BAR_WIDTH), MIN_VISIBLE_BARS, MAX_VISIBLE_BARS);
+      const lastIndex = candleCount - 1;
+      const to = lastIndex + CENTER_PADDING_BARS;
+      const from = Math.max(0, to - visibleBars);
+      const barSpacing = Math.max(5, Math.min(12, chartWidth / visibleBars));
+
+      priceChart.timeScale().applyOptions({
+        rightOffset: CENTER_PADDING_BARS,
+        barSpacing,
+      });
+      priceChart.timeScale().setVisibleLogicalRange({ from, to });
+      rsiChart?.timeScale().applyOptions({
+        rightOffset: CENTER_PADDING_BARS,
+        barSpacing,
+      });
+      rsiChart?.timeScale().setVisibleLogicalRange({ from, to });
+
+      if (options.fitContent) {
+        priceChart.timeScale().fitContent();
+        rsiChart?.timeScale().fitContent();
+      }
+
+      if (options.scrollToRealTime) {
+        priceChart.timeScale().scrollToRealTime();
+        rsiChart?.timeScale().scrollToRealTime();
+      }
+    },
+    []
+  );
+
+  /* eslint-disable react-hooks/set-state-in-effect */
   useEffect(() => {
     if (!priceChartContainerRef.current || !rsiChartContainerRef.current) {
       return;
@@ -160,7 +328,7 @@ export default function TradingChart() {
           borderColor: "#334155",
           barSpacing: 8,
           minBarSpacing: 4,
-          rightOffset: RIGHT_PADDING_BARS,
+          rightOffset: RIGHT_PADDING_BARS + CENTER_PADDING_BARS,
           timeVisible: true,
           secondsVisible: false,
           shiftVisibleRangeOnNewBar: true,
@@ -246,10 +414,12 @@ export default function TradingChart() {
       setIsChartReady(true);
 
       const resizeCharts = () => {
-        priceChart.applyOptions({ height: PRICE_CHART_HEIGHT });
-        rsiChart.applyOptions({ height: RSI_CHART_HEIGHT });
+        const width = Math.max(priceContainer.clientWidth, MIN_CHART_WIDTH);
+
+        priceChart.applyOptions({ width, height: PRICE_CHART_HEIGHT });
+        rsiChart.applyOptions({ width, height: RSI_CHART_HEIGHT });
         requestAnimationFrame(() => {
-          fitChartContent();
+          applyLatestVisibleRange();
         });
       };
 
@@ -281,17 +451,31 @@ export default function TradingChart() {
       disposed = true;
       removeResizeListener?.();
       resizeObserver?.disconnect();
-      priceChartRef.current?.remove();
-      rsiChartRef.current?.remove();
+      if (priceChartRef.current) {
+        if (candleSeriesRef.current) priceChartRef.current.removeSeries(candleSeriesRef.current);
+        if (sma20SeriesRef.current) priceChartRef.current.removeSeries(sma20SeriesRef.current);
+        if (sma50SeriesRef.current) priceChartRef.current.removeSeries(sma50SeriesRef.current);
+        priceChartRef.current.remove();
+      }
+      if (rsiChartRef.current) {
+        if (rsiSeriesRef.current) rsiChartRef.current.removeSeries(rsiSeriesRef.current);
+        rsiChartRef.current.remove();
+      }
       priceChartRef.current = null;
       rsiChartRef.current = null;
       candleSeriesRef.current = null;
+      positionPriceLinesRef.current = [];
       sma20SeriesRef.current = null;
       sma50SeriesRef.current = null;
       rsiSeriesRef.current = null;
+      if (liveUpdateTimerRef.current) {
+        window.clearTimeout(liveUpdateTimerRef.current);
+        liveUpdateTimerRef.current = null;
+      }
+      pendingLiveCandleRef.current = null;
       setIsChartReady(false);
     };
-  }, [fitChartContent]);
+  }, [applyLatestVisibleRange]);
 
   useEffect(() => {
     if (!isChartReady) {
@@ -300,7 +484,19 @@ export default function TradingChart() {
 
     const abortController = new AbortController();
 
+    candlesRef.current = [];
+    closedCandlesRef.current = [];
+    pendingLiveCandleRef.current = null;
+    pendingClosedCandleRef.current = null;
+    if (liveUpdateTimerRef.current) {
+      window.clearTimeout(liveUpdateTimerRef.current);
+      liveUpdateTimerRef.current = null;
+    }
     setCandles([]);
+    setClosedCandles([]);
+    setPositionLevels({ entry: null, stop: null, takeProfit: null });
+    hasLoadedInitialRangeRef.current = false;
+    planResetKeyRef.current = null;
     setIsLive(false);
     setIsLoading(true);
     setErrorMessage(null);
@@ -319,13 +515,17 @@ export default function TradingChart() {
 
         const rawData = (await response.json()) as BinanceKlineResponse[];
         const nextCandles = parseKlines(rawData);
+        const nextClosedCandles = parseKlines(getClosedBinanceKlines(rawData));
 
         if (nextCandles.length === 0) {
           throw new Error("No data returned from Binance");
         }
 
         if (!abortController.signal.aborted) {
+          candlesRef.current = nextCandles;
+          closedCandlesRef.current = nextClosedCandles;
           setCandles(nextCandles);
+          setClosedCandles(nextClosedCandles);
           setIsLoading(false);
         }
       } catch (error) {
@@ -344,7 +544,124 @@ export default function TradingChart() {
       abortController.abort();
     };
   }, [isChartReady, symbol, interval]);
+  /* eslint-enable react-hooks/set-state-in-effect */
 
+  /* eslint-disable react-hooks/set-state-in-effect */
+  useEffect(() => {
+    if (!activeTrade) {
+      setPositionLevels({ entry: null, stop: null, takeProfit: null });
+      return;
+    }
+
+    setPositionSide(activeTrade.direction === "LONG" ? "long" : "short");
+    setPositionLevels({
+      entry: activeTrade.entry,
+      stop: activeTrade.stopLoss,
+      takeProfit: activeTrade.takeProfit,
+    });
+  }, [activeTrade]);
+  /* eslint-enable react-hooks/set-state-in-effect */
+
+  useEffect(() => {
+    const candleSeries = candleSeriesRef.current;
+
+    if (!candleSeries) {
+      return;
+    }
+
+    positionPriceLinesRef.current.forEach((line) => {
+      candleSeries.removePriceLine(line);
+    });
+    positionPriceLinesRef.current = [];
+
+    const lineConfigs = [
+      positionLevels.takeProfit !== null
+        ? {
+            price: positionLevels.takeProfit,
+            color: "#14c994",
+            title: positionSide === "long" ? "TP" : "TP",
+          }
+        : null,
+      positionLevels.entry !== null
+        ? {
+            price: positionLevels.entry,
+            color: "#60a5fa",
+            title: "ENTRY",
+          }
+        : null,
+      positionLevels.stop !== null
+        ? {
+            price: positionLevels.stop,
+            color: "#ff5a74",
+            title: "SL",
+          }
+        : null,
+    ].filter((config): config is { price: number; color: string; title: string } => config !== null);
+
+    positionPriceLinesRef.current = lineConfigs.map((config) =>
+      candleSeries.createPriceLine({
+        price: config.price,
+        color: config.color,
+        lineWidth: 2,
+        lineStyle: 2,
+        axisLabelVisible: true,
+        title: config.title,
+      })
+    );
+
+    return () => {
+      positionPriceLinesRef.current.forEach((line) => {
+        candleSeries.removePriceLine(line);
+      });
+      positionPriceLinesRef.current = [];
+    };
+  }, [positionLevels.entry, positionLevels.stop, positionLevels.takeProfit, positionSide]);
+
+  const flushLiveCandle = useCallback(() => {
+    const candle = pendingLiveCandleRef.current;
+    const closedCandle = pendingClosedCandleRef.current;
+
+    liveUpdateTimerRef.current = null;
+    pendingLiveCandleRef.current = null;
+    pendingClosedCandleRef.current = null;
+
+    if (!candle) {
+      return;
+    }
+
+    const nextCandles = upsertCandle(candlesRef.current, candle);
+    candlesRef.current = nextCandles;
+    candleSeriesRef.current?.update(candle);
+    setCandles(nextCandles);
+
+    if (closedCandle) {
+      const nextClosedCandles = upsertCandle(closedCandlesRef.current, closedCandle);
+      closedCandlesRef.current = nextClosedCandles;
+      setClosedCandles(nextClosedCandles);
+      tickTradeAge(Number(closedCandle.time));
+    }
+
+    setIsLive(true);
+    setSocketError(null);
+  }, [tickTradeAge]);
+
+  const scheduleLiveCandle = useCallback(
+    (candle: CandlePoint, isClosed: boolean) => {
+      pendingLiveCandleRef.current = candle;
+      if (isClosed) {
+        pendingClosedCandleRef.current = candle;
+      }
+
+      if (liveUpdateTimerRef.current) {
+        return;
+      }
+
+      liveUpdateTimerRef.current = window.setTimeout(flushLiveCandle, LIVE_UPDATE_MS);
+    },
+    [flushLiveCandle]
+  );
+
+  /* eslint-disable react-hooks/set-state-in-effect */
   useEffect(() => {
     if (!isChartReady || isLoading || errorMessage) {
       return;
@@ -353,16 +670,19 @@ export default function TradingChart() {
     const closeSocket = createBinanceKlineSocket({
       symbol,
       interval,
-      onCandle: ({ candle }) => {
+      onCandle: ({ candle, isClosed }) => {
         const nextCandle = parseKline(candle);
 
         if (!nextCandle) {
           return;
         }
 
-        setCandles((currentCandles) => upsertCandle(currentCandles, nextCandle));
-        setIsLive(true);
-        setSocketError(null);
+        if (!isClosed) {
+          scheduleLiveCandle(nextCandle, false);
+          return;
+        }
+
+        scheduleLiveCandle(nextCandle, true);
       },
       onError: () => {
         setIsLive(false);
@@ -370,8 +690,16 @@ export default function TradingChart() {
       },
     });
 
-    return closeSocket;
-  }, [errorMessage, interval, isChartReady, isLoading, symbol]);
+    return () => {
+      closeSocket();
+      pendingLiveCandleRef.current = null;
+      pendingClosedCandleRef.current = null;
+      if (liveUpdateTimerRef.current) {
+        window.clearTimeout(liveUpdateTimerRef.current);
+        liveUpdateTimerRef.current = null;
+      }
+    };
+  }, [errorMessage, interval, isChartReady, isLoading, scheduleLiveCandle, symbol]);
 
   useEffect(() => {
     if (!isChartReady || candles.length === 0) {
@@ -382,14 +710,118 @@ export default function TradingChart() {
     const sma50Data = toLineData(indicators.sma50);
     const rsiData = toLineData(indicators.rsi);
 
-    candleSeriesRef.current?.setData(candles);
+    if (!hasLoadedInitialRangeRef.current) {
+      candleSeriesRef.current?.setData(candles);
+    }
     sma20SeriesRef.current?.setData(showSma20 ? sma20Data : []);
     sma50SeriesRef.current?.setData(showSma50 ? sma50Data : []);
     rsiSeriesRef.current?.setData(showRsi ? rsiData : []);
     requestAnimationFrame(() => {
-      fitChartContent();
+      if (!hasLoadedInitialRangeRef.current) {
+        applyLatestVisibleRange({ fitContent: true, scrollToRealTime: true });
+        hasLoadedInitialRangeRef.current = true;
+      }
     });
-  }, [candles, indicators.rsi, indicators.sma20, indicators.sma50, isChartReady, fitChartContent, showSma20, showSma50, showRsi]);
+  }, [candles, indicators.rsi, indicators.sma20, indicators.sma50, isChartReady, applyLatestVisibleRange, showSma20, showSma50, showRsi]);
+
+  useEffect(() => {
+    if (!indicators.snapshot) {
+      return;
+    }
+
+    setIndicatorSnapshot(symbol, interval, indicators.snapshot);
+  }, [indicators.snapshot, interval, setIndicatorSnapshot, symbol]);
+
+  useEffect(() => {
+    planResetKeyRef.current = `${symbol}:${interval}:${positionSide}`;
+  }, [interval, positionSide, symbol]);
+
+  useEffect(() => {
+    if (!pendingRiskSyncRef.current) {
+      return;
+    }
+
+    pendingRiskSyncRef.current = false;
+    updateRiskInput("entryPrice", formatRiskInput(positionLevels.entry));
+    updateRiskInput("stopLoss", formatRiskInput(positionLevels.stop));
+    updateRiskInput("takeProfit", formatRiskInput(positionLevels.takeProfit));
+    updateRiskInput("action", positionSide === "long" ? "Long" : "Short");
+    updateRiskInput("atr", formatRiskInput(indicators.latestAtr));
+  }, [
+    indicators.latestAtr,
+    positionLevels.entry,
+    positionLevels.stop,
+    positionLevels.takeProfit,
+    positionSide,
+    updateRiskInput,
+  ]);
+
+  useEffect(() => {
+    if (activeTrade || pendingRiskSyncRef.current) {
+      return;
+    }
+
+    const nextLevels = {
+      entry: parseRiskNumber(riskEntryPrice),
+      stop: parseRiskNumber(riskStopLoss),
+      takeProfit: parseRiskNumber(riskTakeProfit),
+    };
+
+    if (nextLevels.entry === null && nextLevels.stop === null && nextLevels.takeProfit === null) {
+      return;
+    }
+
+    const hasChanged =
+      nextLevels.entry !== positionLevels.entry ||
+      nextLevels.stop !== positionLevels.stop ||
+      nextLevels.takeProfit !== positionLevels.takeProfit;
+
+    if (hasChanged) {
+      setPositionLevels(nextLevels);
+    }
+
+    if (riskAction === "Long" && positionSide !== "long") {
+      setPositionSide("long");
+    }
+
+    if (riskAction === "Short" && positionSide !== "short") {
+      setPositionSide("short");
+    }
+  }, [
+    positionLevels.entry,
+    positionLevels.stop,
+    positionLevels.takeProfit,
+    positionSide,
+    riskAction,
+    riskEntryPrice,
+    riskStopLoss,
+    riskTakeProfit,
+    activeTrade,
+  ]);
+  /* eslint-enable react-hooks/set-state-in-effect */
+
+  useEffect(() => {
+    if (!activeTrade || latestPrice === null || activeTrade.status !== "OPEN") {
+      return;
+    }
+
+    const cooldownEnd = Date.now() + intervalToMs(interval) * 3;
+
+    if (activeTrade.direction === "LONG") {
+      if (latestPrice >= activeTrade.takeProfit) {
+        closeTrade("TP_HIT", cooldownEnd);
+      } else if (latestPrice <= activeTrade.stopLoss) {
+        closeTrade("SL_HIT", cooldownEnd);
+      }
+      return;
+    }
+
+    if (latestPrice <= activeTrade.takeProfit) {
+      closeTrade("TP_HIT", cooldownEnd);
+    } else if (latestPrice >= activeTrade.stopLoss) {
+      closeTrade("SL_HIT", cooldownEnd);
+    }
+  }, [activeTrade, closeTrade, interval, latestPrice]);
 
   const statusText = isLoading
     ? "Loading market data..."
@@ -398,159 +830,147 @@ export default function TradingChart() {
     : isLive
     ? "Live stream active"
     : "Connecting live stream";
+  const positionMetrics = [
+    positionLevels.entry !== null ? ["Entry", formatNumber(positionLevels.entry)] : null,
+    positionLevels.stop !== null ? ["Stop", formatNumber(positionLevels.stop)] : null,
+    positionLevels.takeProfit !== null ? ["TP", formatNumber(positionLevels.takeProfit)] : null,
+    positionRiskReward !== null ? ["RR", formatNumber(positionRiskReward, 2)] : null,
+  ].filter((metric): metric is [string, string] => metric !== null);
 
   return (
-    <div className="rounded-lg border border-slate-800 bg-slate-950/95 p-4">
-      <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+    <div className="flex flex-col gap-3">
+      <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <p className="text-xs uppercase tracking-[0.3em] text-slate-500">Market</p>
-          <h2 className="text-2xl font-semibold text-white">{symbol}</h2>
-          <p className="mt-1 text-sm text-slate-400">{interval} candlesticks</p>
+          <h2 className="text-xl font-semibold text-white">{symbol}</h2>
+          <p className="text-xs text-slate-400">{interval} candlesticks</p>
         </div>
-        <div className="grid gap-2 text-sm sm:text-right">
-          <div className="rounded-lg bg-slate-900 px-4 py-3 text-slate-300">{statusText}</div>
+        <div className="grid gap-2 text-xs sm:text-right">
+          <div className="rounded-lg bg-slate-900 px-3 py-2 text-slate-300">{statusText}</div>
           {socketError ? (
-            <div className="rounded-lg border border-amber-400/30 bg-amber-400/10 px-4 py-2 text-amber-100">
+            <div className="rounded-lg border border-amber-400/30 bg-amber-400/10 px-3 py-2 text-amber-100">
               {socketError}
             </div>
           ) : null}
         </div>
       </div>
 
-      <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_220px]">
-        <div className="space-y-4">
-          <div className="grid gap-2 sm:grid-cols-4">
-            <div className="rounded-lg border border-slate-800 bg-[#020617] px-3 py-2">
-              <p className="text-[11px] uppercase tracking-[0.18em] text-slate-500">Last</p>
-              <p className="mt-1 text-sm font-semibold text-white">
-                {formatValue(indicators.latestClose, 4)}
-              </p>
-            </div>
-            <div className="rounded-lg border border-sky-400/30 bg-sky-400/10 px-3 py-2">
-              <p className="text-[11px] uppercase tracking-[0.18em] text-sky-200">SMA 20</p>
-              <p className="mt-1 text-sm font-semibold text-sky-50">
-                {formatValue(indicators.latestSma20, 4)}
-              </p>
-            </div>
-            <div className="rounded-lg border border-amber-400/30 bg-amber-400/10 px-3 py-2">
-              <p className="text-[11px] uppercase tracking-[0.18em] text-amber-100">SMA 50</p>
-              <p className="mt-1 text-sm font-semibold text-amber-50">
-                {formatValue(indicators.latestSma50, 4)}
-              </p>
-            </div>
-            <div className="rounded-lg border border-violet-400/30 bg-violet-400/10 px-3 py-2">
-              <p className="text-[11px] uppercase tracking-[0.18em] text-violet-100">RSI 14</p>
-              <p className="mt-1 text-sm font-semibold text-violet-50">
-                {formatValue(indicators.latestRsi)}
-              </p>
-            </div>
-          </div>
+      <div className="flex flex-wrap gap-2 border-y border-slate-800 py-2">
+        <label className="flex items-center gap-2 rounded-lg border border-slate-800 bg-slate-900/50 px-2 py-1.5 text-xs text-slate-300 transition hover:border-slate-700">
+          <input type="checkbox" checked={showSma20} onChange={() => setShowSma20((v) => !v)} className="h-4 w-4 accent-sky-400" />
+          SMA 20
+        </label>
+        <label className="flex items-center gap-2 rounded-lg border border-slate-800 bg-slate-900/50 px-2 py-1.5 text-xs text-slate-300 transition hover:border-slate-700">
+          <input type="checkbox" checked={showSma50} onChange={() => setShowSma50((v) => !v)} className="h-4 w-4 accent-amber-400" />
+          SMA 50
+        </label>
+        <label className="flex items-center gap-2 rounded-lg border border-slate-800 bg-slate-900/50 px-2 py-1.5 text-xs text-slate-300 transition hover:border-slate-700">
+          <input type="checkbox" checked={showRsi} onChange={() => setShowRsi((v) => !v)} className="h-4 w-4 accent-violet-400" />
+          RSI 14
+        </label>
+      </div>
 
-          <div className="relative overflow-hidden rounded-lg border border-slate-800 bg-[#020617]">
-            <div className="absolute left-3 top-3 z-10 flex flex-wrap gap-2 text-xs">
-              {showSma20 ? (
-                <span className="rounded-md border border-sky-400/30 bg-slate-950/80 px-2 py-1 text-sky-200">
-                  SMA 20
-                </span>
-              ) : null}
-              {showSma50 ? (
-                <span className="rounded-md border border-amber-400/30 bg-slate-950/80 px-2 py-1 text-amber-100">
-                  SMA 50
-                </span>
-              ) : null}
-              {showRsi ? (
-                <span className="rounded-md border border-violet-400/30 bg-slate-950/80 px-2 py-1 text-violet-100">
-                  RSI 14
-                </span>
-              ) : null}
-            </div>
-            <div ref={priceChartContainerRef} className="h-[440px] min-h-[300px] w-full" />
-            {isLoading ? (
-              <div className="absolute inset-0 flex items-center justify-center bg-slate-950/70 text-sm text-slate-300">
-                Loading market data...
-              </div>
-            ) : null}
+      <div className="relative overflow-hidden border border-slate-800 bg-[#020617]">
+        <div ref={priceChartContainerRef} className="h-[540px] w-full" />
+        {isLoading ? (
+          <div className="absolute inset-0 flex items-center justify-center bg-slate-950/70 text-sm text-slate-300">
+            Loading market data...
           </div>
+        ) : null}
+      </div>
 
-          <div className="overflow-hidden rounded-lg border border-slate-800 bg-[#020617]">
-            <div className="flex items-center justify-between border-b border-slate-800 px-3 py-2 text-xs">
-              <span className="font-semibold uppercase tracking-[0.18em] text-violet-100">RSI 14</span>
-              <span className="text-slate-400">70 / 30 bands</span>
-            </div>
-            <div ref={rsiChartContainerRef} className="h-[180px] w-full" />
-          </div>
+      {tradeMetrics ? (
+        <div className="grid gap-2 border border-slate-800 bg-slate-950 p-3 text-xs [grid-template-columns:repeat(auto-fit,minmax(180px,1fr))]">
+          <span className="text-slate-400">Trade age <b className="text-white">{activeTrade?.tradeAge ?? 0}m</b></span>
+          <span className="text-slate-400">PnL <b className={tradeMetrics.pnl >= 0 ? "text-emerald-300" : "text-red-300"}>{formatNumber(tradeMetrics.pnl, 4)}</b></span>
+          <span className="text-slate-400">Distance TP <b className="text-white">{formatNumber(tradeMetrics.distanceTp)}</b></span>
+          <span className="text-slate-400">Distance SL <b className="text-white">{formatNumber(tradeMetrics.distanceSl)}</b></span>
+          <span className="text-slate-400">RR <b className="text-white">1:{formatNumber(activeTrade?.rr, 2)}</b></span>
+          <span className="text-slate-400">Confidence <b className="text-white">{activeTrade?.confidence}%</b></span>
+          <span className="text-slate-400">Expected reward <b className="text-white">{formatNumber(tradeMetrics.expectedReward)}</b></span>
+          <span className="text-slate-400">Risk amount <b className="text-white">{formatNumber(tradeMetrics.riskAmount)}</b></span>
+          <span className="text-slate-400">Market health <b className="text-white">{tradeMetrics.marketHealth}%</b></span>
+          <span className="text-slate-400">Trade quality <b className="text-white">{tradeMetrics.tradeQuality}%</b></span>
         </div>
+      ) : null}
 
-        <aside className="space-y-4 rounded-3xl border border-slate-800 bg-slate-950/95 p-4">
-          <div>
-            <p className="text-xs uppercase tracking-[0.28em] text-slate-500">Indicator controls</p>
-            <h3 className="mt-2 text-lg font-semibold text-white">Chart overlays</h3>
-            <p className="mt-1 text-sm text-slate-400">Toggle indicators for a clean TradingView-style view.</p>
-          </div>
+      <div className="overflow-hidden border border-slate-800 bg-[#020617]">
+        <div className="flex items-center justify-between border-b border-slate-800 px-3 py-2 text-xs">
+          <span className="font-semibold uppercase tracking-[0.18em] text-violet-100">RSI 14</span>
+          <span className="text-slate-400">{formatNumber(indicators.latestRsi)} / 70 / 30 bands</span>
+        </div>
+        <div ref={rsiChartContainerRef} className="h-[88px] w-full" />
+      </div>
 
-          <div className="grid gap-3">
-            <button
-              type="button"
-              onClick={() => setShowSma20((value) => !value)}
-              className={`rounded-2xl border px-4 py-3 text-left text-sm font-semibold transition ${
-                showSma20
-                  ? "border-sky-400 bg-sky-400/10 text-sky-100"
-                  : "border-slate-700 bg-slate-950 text-slate-300 hover:border-slate-500"
-              }`}
-            >
-              <span>SMA 20</span>
-              <p className="mt-1 text-xs text-slate-400">Smooth short-term trend</p>
-            </button>
-            <button
-              type="button"
-              onClick={() => setShowSma50((value) => !value)}
-              className={`rounded-2xl border px-4 py-3 text-left text-sm font-semibold transition ${
-                showSma50
-                  ? "border-amber-400 bg-amber-400/10 text-amber-100"
-                  : "border-slate-700 bg-slate-950 text-slate-300 hover:border-slate-500"
-              }`}
-            >
-              <span>SMA 50</span>
-              <p className="mt-1 text-xs text-slate-400">Medium-term trend</p>
-            </button>
-            <button
-              type="button"
-              onClick={() => setShowRsi((value) => !value)}
-              className={`rounded-2xl border px-4 py-3 text-left text-sm font-semibold transition ${
-                showRsi
-                  ? "border-violet-400 bg-violet-400/10 text-violet-100"
-                  : "border-slate-700 bg-slate-950 text-slate-300 hover:border-slate-500"
-              }`}
-            >
-              <span>RSI 14</span>
-              <p className="mt-1 text-xs text-slate-400">Momentum oscillator</p>
-            </button>
-          </div>
+      <div className="grid gap-3 text-sm [grid-template-columns:repeat(auto-fit,minmax(180px,1fr))]">
+        <div className="min-h-[60px] border border-slate-800 bg-slate-950 p-3">
+          <p className="text-xs uppercase tracking-[0.18em] text-slate-500">MACD</p>
+          <p className="mt-1 font-semibold text-white">
+            {formatNumber(indicators.latestMacd?.macd)} / {formatNumber(indicators.latestMacd?.signal)}
+          </p>
+          <p className="text-xs text-slate-400">Hist {formatNumber(indicators.latestMacd?.histogram)}</p>
+        </div>
+        <div className="min-h-[60px] border border-slate-800 bg-slate-950 p-3">
+          <p className="text-xs uppercase tracking-[0.18em] text-slate-500">Trend</p>
+          <p className="mt-1 font-semibold text-white">
+            EMA20 {formatNumber(indicators.latestEma20)} / EMA50 {formatNumber(indicators.latestEma50)}
+          </p>
+          <p className="text-xs text-slate-400">ADX {formatNumber(indicators.latestAdx)}</p>
+        </div>
+        <div className="min-h-[60px] border border-slate-800 bg-slate-950 p-3">
+          <p className="text-xs uppercase tracking-[0.18em] text-slate-500">Volatility</p>
+          <p className="mt-1 font-semibold text-white">
+            ATR {formatNumber(indicators.latestAtr)} <span className="text-slate-500">/</span> VWAP {formatNumber(indicators.latestVwap)}
+          </p>
+        </div>
+        <div className="min-h-[60px] border border-slate-800 bg-slate-950 p-3">
+          <p className="text-xs uppercase tracking-[0.18em] text-slate-500">Levels</p>
+          <p className="mt-1 font-semibold text-white">
+            S {formatNumber(indicators.snapshot?.support)} / R {formatNumber(indicators.snapshot?.resistance)}
+          </p>
+          <p className="text-xs text-slate-400">Vol x{formatNumber(indicators.snapshot?.volumeSpike, 2)}</p>
+        </div>
+      </div>
 
-          <div className="rounded-3xl border border-slate-800 bg-[#020617] p-4 text-sm">
-            <div className="grid gap-3">
-              <div className="flex items-center justify-between gap-3 rounded-2xl border border-slate-800 bg-slate-950/70 px-3 py-3">
-                <span className="text-slate-400">SMA 20 value</span>
-                <span className="font-semibold text-sky-100">{formatValue(indicators.latestSma20, 4)}</span>
-              </div>
-              <div className="flex items-center justify-between gap-3 rounded-2xl border border-slate-800 bg-slate-950/70 px-3 py-3">
-                <span className="text-slate-400">SMA 50 value</span>
-                <span className="font-semibold text-amber-100">{formatValue(indicators.latestSma50, 4)}</span>
-              </div>
-              <div className="flex items-center justify-between gap-3 rounded-2xl border border-slate-800 bg-slate-950/70 px-3 py-3">
-                <span className="text-slate-400">RSI 14 value</span>
-                <span className="font-semibold text-violet-100">{formatValue(indicators.latestRsi)}</span>
-              </div>
-            </div>
+      <div className="grid gap-3 border border-slate-800 bg-slate-950 p-3 md:grid-cols-[auto_1fr] md:items-center">
+        <div className="flex gap-2">
+          <button
+            type="button"
+            onClick={() => setPositionSide("long")}
+            className={`px-3 py-2 text-xs font-semibold uppercase tracking-[0.16em] ${
+              positionSide === "long" ? "bg-emerald-400 text-slate-950" : "border border-slate-700 text-slate-300"
+            }`}
+          >
+            Long
+          </button>
+          <button
+            type="button"
+            onClick={() => setPositionSide("short")}
+            className={`px-3 py-2 text-xs font-semibold uppercase tracking-[0.16em] ${
+              positionSide === "short" ? "bg-red-400 text-slate-950" : "border border-slate-700 text-slate-300"
+            }`}
+          >
+            Short
+          </button>
+        </div>
+        {positionMetrics.length > 0 ? (
+          <div className="grid gap-2 text-xs [grid-template-columns:repeat(auto-fit,minmax(180px,1fr))]">
+            {positionMetrics.map(([label, value]) => (
+              <span key={label} className="text-slate-400">
+                {label} <b className="text-white">{value}</b>
+              </span>
+            ))}
           </div>
-        </aside>
+        ) : null}
       </div>
 
       {errorMessage ? (
-        <p className="mt-4 rounded-lg bg-red-950/80 px-4 py-3 text-sm text-red-300">
+        <p className="rounded-lg bg-red-950/80 px-4 py-3 text-sm text-red-300">
           {errorMessage}
         </p>
       ) : null}
     </div>
   );
 }
+
+export default memo(TradingChart);

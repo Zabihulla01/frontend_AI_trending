@@ -1,5 +1,11 @@
 import { create } from "zustand";
-import type { AnalysisTimeframe, TimeframeAnalysis } from "@/services/analysis";
+import type {
+  AnalysisTimeframe,
+  TimeframeAnalysis,
+  MarketCondition,
+  MarketTrendState,
+  VolatilityState,
+} from "@/services/analysis";
 
 type AnalysisStatus = "idle" | "loading" | "ready" | "error";
 
@@ -8,6 +14,11 @@ interface AnalysisState {
   status: AnalysisStatus;
   errorMessage: string | null;
   results: Partial<Record<AnalysisTimeframe, TimeframeAnalysis>>;
+  marketState: {
+    trend: MarketTrendState;
+    market: MarketCondition;
+    volatility: VolatilityState;
+  } | null;
   setLoading: (symbol: string) => void;
   setResult: (timeframe: AnalysisTimeframe, result: TimeframeAnalysis) => void;
   setError: (message: string) => void;
@@ -19,12 +30,14 @@ export const useAnalysisStore = create<AnalysisState>((set) => ({
   status: "idle",
   errorMessage: null,
   results: {},
+  marketState: null,
   setLoading: (symbol) =>
     set({
       symbol,
       status: "loading",
       errorMessage: null,
       results: {},
+      marketState: null,
     }),
   setResult: (timeframe, result) =>
     set((state) => ({
@@ -33,6 +46,11 @@ export const useAnalysisStore = create<AnalysisState>((set) => ({
       results: {
         ...state.results,
         [timeframe]: result,
+      },
+      marketState: {
+        trend: result.marketTrend,
+        market: result.marketCondition,
+        volatility: result.volatilityState,
       },
     })),
   setError: (message) =>
@@ -46,5 +64,6 @@ export const useAnalysisStore = create<AnalysisState>((set) => ({
       status: "idle",
       errorMessage: null,
       results: {},
+      marketState: null,
     }),
 }));

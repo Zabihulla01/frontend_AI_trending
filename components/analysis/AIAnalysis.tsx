@@ -1,13 +1,15 @@
 "use client";
 
 import { useEffect, useMemo, useRef } from "react";
-import type { BinanceKlineResponse } from "@/services/binance";
+import { getClosedBinanceKlines, type BinanceKlineResponse } from "@/services/binance";
 import {
   ANALYSIS_TIMEFRAMES,
   type AnalysisCandle,
   type AnalysisSignal,
   type AnalysisTimeframe,
   type AnalysisTrend,
+  type MarketCondition,
+  type VolatilityState,
   type TimeframeAnalysis,
   analyzeTimeframe,
   calculateCompositeSignal,
@@ -15,8 +17,11 @@ import {
 import { createBinanceKlineSocket } from "@/services/websocket";
 import { useAnalysisStore } from "@/store/useAnalysisStore";
 import { useMarketStore } from "@/store/useMarketStore";
+import { formatRiskInput, useRiskStore } from "@/store/useRiskStore";
+import { useTradeStore, type TradeDirection } from "@/store/useTradeStore";
 
 const HISTORY_LIMIT = 120;
+const ANALYSIS_DEBOUNCE_MS = 1500;
 
 function parseKline(kline: BinanceKlineResponse): AnalysisCandle | null {
   const candle = {
@@ -25,6 +30,7 @@ function parseKline(kline: BinanceKlineResponse): AnalysisCandle | null {
     high: Number(kline[2]),
     low: Number(kline[3]),
     close: Number(kline[4]),
+    volume: Number(kline[5]),
   };
 
   const isValid =
@@ -83,7 +89,87 @@ function getTrendTextClass(trend: AnalysisTrend) {
   return "text-amber-200";
 }
 
-export default function AIAnalysis() {
+function getMarketBadgeClasses(market: MarketCondition) {
+  if (market === "Bull") {
+    return "border-emerald-400/40 bg-emerald-400/10 text-emerald-200";
+  }
+
+  if (market === "Bear") {
+    return "border-red-400/40 bg-red-500/10 text-red-200";
+  }
+
+  return "border-slate-500/30 bg-slate-500/10 text-slate-200";
+}
+
+function getVolatilityBadgeClasses(volatility: VolatilityState) {
+  if (volatility === "High") {
+    return "border-violet-400/30 bg-violet-400/10 text-violet-200";
+  }
+
+  if (volatility === "Medium") {
+    return "border-amber-300/30 bg-amber-300/10 text-amber-100";
+  }
+
+  return "border-slate-500/30 bg-slate-500/10 text-slate-200";
+}
+
+function getRiskBadgeClasses(risk: "Low" | "Medium" | "High") {
+  if (risk === "High") {
+    return "border-red-400/30 bg-red-500/10 text-red-200";
+  }
+
+  if (risk === "Medium") {
+    return "border-amber-300/30 bg-amber-300/10 text-amber-100";
+  }
+
+  return "border-slate-500/30 bg-slate-500/10 text-slate-200";
+}
+
+function simplifySignal(signal: AnalysisSignal) {
+  if (signal === "Wait") {
+    return "WAIT";
+  }
+
+  if (signal === "Strong Buy" || signal === "Buy") {
+    return "BUY";
+  }
+
+  if (signal === "Strong Sell" || signal === "Sell") {
+    return "SELL";
+  }
+
+  return "WAIT";
+}
+
+function getSuggestedAction(signal: string, trend: string) {
+  if (signal === "BUY") {
+    return "LONG";
+  }
+
+  if (signal === "SELL") {
+    return "SHORT";
+  }
+
+  if (trend === "Trending" || trend === "Volatile") {
+    return "Watch breakout";
+  }
+
+  return "Wait";
+}
+
+function getSuggestedActionClasses(signal: string) {
+  if (signal === "BUY") {
+    return "border-emerald-500/30 bg-emerald-500/10 text-emerald-200";
+  }
+
+  if (signal === "SELL") {
+    return "border-red-500/30 bg-red-500/10 text-red-200";
+  }
+
+  return "border-amber-300/30 bg-amber-300/10 text-amber-100";
+}
+
+export default function AIAnalysis({ headless = false }: { headless?: boolean } = {}) {
   const symbol = useMarketStore((state) => state.symbol);
   const status = useAnalysisStore((state) => state.status);
   const errorMessage = useAnalysisStore((state) => state.errorMessage);
@@ -91,17 +177,192 @@ export default function AIAnalysis() {
   const setLoading = useAnalysisStore((state) => state.setLoading);
   const setResult = useAnalysisStore((state) => state.setResult);
   const setError = useAnalysisStore((state) => state.setError);
+  const applyTradePlan = useRiskStore((state) => state.applyTradePlan);
+  const activeTrade = useTradeStore((state) => state.activeTrade);
+  const isAuto = useTradeStore((state) => state.isAuto);
+  const isPaused = useTradeStore((state) => state.isPaused);
+  const isLocked = useTradeStore((state) => state.isLocked);
+  const cooldownUntil = useTradeStore((state) => state.cooldownUntil);
+  const forceNonce = useTradeStore((state) => state.forceNonce);
+  const openTrade = useTradeStore((state) => state.openTrade);
+  const closeTrade = useTradeStore((state) => state.closeTrade);
   const candleHistoryRef = useRef<Partial<Record<AnalysisTimeframe, AnalysisCandle[]>>>({});
+  const debounceTimersRef = useRef<Partial<Record<AnalysisTimeframe, number>>>({});
+  const handledForceNonceRef = useRef(forceNonce);
 
   const orderedResults = useMemo(
     () =>
-      ANALYSIS_TIMEFRAMES.map((timeframe) => results[timeframe]).filter(
-        (result): result is TimeframeAnalysis => result !== undefined
-      ),
+      Object.values(results).filter((result): result is TimeframeAnalysis => result !== undefined),
     [results]
   );
   const composite = useMemo(() => calculateCompositeSignal(orderedResults), [orderedResults]);
+  const primaryAnalysis = orderedResults[0] ?? null;
+  const displaySignal = primaryAnalysis ? simplifySignal(primaryAnalysis.signal) : simplifySignal(composite.signal);
+  const displayRisk = primaryAnalysis?.risk ?? "Low";
+  const displayTrend = primaryAnalysis?.trend ?? "Neutral";
+  const displayAction = primaryAnalysis?.action.toUpperCase() ?? getSuggestedAction(displaySignal, displayTrend);
+  const displayEntry = primaryAnalysis?.entry ?? null;
+  const displayStop = primaryAnalysis?.stop ?? null;
+  const displayTakeProfit = primaryAnalysis?.takeProfit ?? null;
+  const displayRiskReward = primaryAnalysis?.riskReward ?? null;
+  const displayReasons =
+    primaryAnalysis?.action === "Wait" ? [primaryAnalysis.suggestedAction] : primaryAnalysis?.reasons ?? [];
+  const displaySetupChecks = primaryAnalysis?.setupChecks ?? null;
+  const displayOpportunityScore = primaryAnalysis?.tradeOpportunityScore ?? composite.strength;
+  const displayMarketCondition = primaryAnalysis?.marketCondition ?? "Sideways";
+  const displayProbability = primaryAnalysis?.probability ?? composite.probability;
+  const displayEntryQuality = primaryAnalysis?.entryQuality ?? 0;
+  const displayTradeQuality = primaryAnalysis?.tradeQuality ?? displayOpportunityScore;
+  const displaySuggestedAction = primaryAnalysis?.suggestedAction ?? `${displayAction}: waiting for analysis`;
   const isLoading = status === "loading";
+  const summaryMetrics = [
+    { label: "Confidence", value: `${primaryAnalysis?.confidence ?? composite.confidence}%` },
+    { label: "Trend", value: displayTrend, className: getTrendTextClass(displayTrend) },
+    { label: "Risk", value: displayRisk, badgeClassName: getRiskBadgeClasses(displayRisk) },
+    { label: "Strength", value: `${primaryAnalysis?.trendStrength ?? composite.strength}%` },
+    { label: "Market", value: displayMarketCondition, badgeClassName: getMarketBadgeClasses(displayMarketCondition) },
+    {
+      label: "Volatility",
+      value: primaryAnalysis?.volatilityState ?? null,
+      badgeClassName: getVolatilityBadgeClasses(primaryAnalysis?.volatilityState ?? "Low"),
+    },
+    { label: "Probability", value: `${displayProbability}%` },
+    { label: "Opportunity", value: `${displayOpportunityScore}%` },
+  ].filter((metric) => metric.value !== null && metric.value !== undefined && metric.value !== "");
+  const tradeMetrics = [
+    displayEntry !== null ? { label: "Entry", value: formatNumber(displayEntry) } : null,
+    displayTakeProfit !== null ? { label: "TP", value: formatNumber(displayTakeProfit) } : null,
+    displayStop !== null ? { label: "Stop", value: formatNumber(displayStop) } : null,
+    displayRiskReward !== null ? { label: "RR", value: `1:${formatNumber(displayRiskReward, 2)}` } : null,
+    displayTradeQuality > 0 ? { label: "Trade quality", value: `${displayTradeQuality}%` } : null,
+    displayEntryQuality > 0 ? { label: "Entry quality", value: `${displayEntryQuality}%` } : null,
+  ].filter((metric): metric is { label: string; value: string } => metric !== null);
+  const indicatorMetrics = [
+    primaryAnalysis?.macdHistogram !== null && primaryAnalysis?.macdHistogram !== undefined
+      ? { label: "MACD hist", value: formatNumber(primaryAnalysis.macdHistogram) }
+      : null,
+    primaryAnalysis?.atr !== null && primaryAnalysis?.atr !== undefined
+      ? { label: "ATR", value: formatNumber(primaryAnalysis.atr) }
+      : null,
+    primaryAnalysis?.adx !== null && primaryAnalysis?.adx !== undefined
+      ? { label: "ADX", value: formatNumber(primaryAnalysis.adx) }
+      : null,
+    primaryAnalysis?.reversalProbability !== null && primaryAnalysis?.reversalProbability !== undefined
+      ? { label: "Reversal", value: `${primaryAnalysis.reversalProbability}%` }
+      : null,
+  ].filter((metric): metric is { label: string; value: string } => metric !== null);
+  const passedSetupChecks = displaySetupChecks
+    ? [
+        ["EMA crossover", displaySetupChecks.emaCrossover],
+        ["MACD confirm", displaySetupChecks.macdConfirm],
+        ["RSI confirm", displaySetupChecks.rsiConfirm],
+        ["Volume confirm", displaySetupChecks.volumeConfirm],
+        ["Trend confirm", displaySetupChecks.trendConfirm],
+        ["Structure", displaySetupChecks.marketStructureConfirm],
+      ].filter(([, passed]) => passed)
+    : [];
+
+  useEffect(() => {
+    if (!primaryAnalysis) {
+      return;
+    }
+
+    if (isPaused) {
+      return;
+    }
+
+    if (activeTrade) {
+      applyTradePlan({
+        action: activeTrade.direction === "LONG" ? "Long" : "Short",
+        entryPrice: formatRiskInput(activeTrade.entry),
+        stopLoss: formatRiskInput(activeTrade.stopLoss),
+        takeProfit: formatRiskInput(activeTrade.takeProfit),
+      });
+      return;
+    }
+
+    applyTradePlan({
+      action: primaryAnalysis.action,
+      entryPrice: formatRiskInput(primaryAnalysis.entry),
+      stopLoss: formatRiskInput(primaryAnalysis.stop),
+      takeProfit: formatRiskInput(primaryAnalysis.takeProfit),
+      atr: formatRiskInput(primaryAnalysis.atr),
+      trend: primaryAnalysis.trend,
+      marketCondition: primaryAnalysis.marketCondition,
+      scoringSignal: primaryAnalysis.scoringSignal,
+      confidence: primaryAnalysis.confidence,
+      ema20: primaryAnalysis.ema20,
+      ema50: primaryAnalysis.ema50,
+      rsi: primaryAnalysis.rsi,
+      macdHistogram: primaryAnalysis.macdHistogram,
+      support: primaryAnalysis.support,
+      resistance: primaryAnalysis.resistance,
+      volatility: primaryAnalysis.volatility,
+      volumeSpike: primaryAnalysis.volumeSpike,
+      signal: primaryAnalysis.signal,
+      trendStrength: primaryAnalysis.trendStrength,
+      vwap: primaryAnalysis.vwap,
+      lastClose: primaryAnalysis.lastClose,
+    });
+  }, [
+    applyTradePlan,
+    primaryAnalysis?.action,
+    primaryAnalysis?.atr,
+    primaryAnalysis?.entry,
+    primaryAnalysis?.stop,
+    primaryAnalysis?.takeProfit,
+    primaryAnalysis,
+    activeTrade,
+    isPaused,
+  ]);
+
+  useEffect(() => {
+    if (!isAuto || isPaused || !primaryAnalysis) {
+      return;
+    }
+
+    const isForced = forceNonce !== handledForceNonceRef.current;
+
+    if (Date.now() < cooldownUntil && !isForced) {
+      return;
+    }
+
+    const direction: TradeDirection | null =
+      primaryAnalysis.action === "Long" ? "LONG" : primaryAnalysis.action === "Short" ? "SHORT" : null;
+
+    if (
+      direction === null ||
+      primaryAnalysis.action === "Wait" ||
+      primaryAnalysis.confidence <= 80 ||
+      primaryAnalysis.marketCondition === "Sideways" ||
+      primaryAnalysis.entry === null ||
+      primaryAnalysis.stop === null ||
+      primaryAnalysis.takeProfit === null ||
+      primaryAnalysis.riskReward === null ||
+      !Object.values(primaryAnalysis.setupChecks).every(Boolean)
+    ) {
+      return;
+    }
+
+    if (activeTrade) {
+      if (isLocked || activeTrade.direction === direction) {
+        return;
+      }
+
+      closeTrade("CLOSED");
+    }
+
+    openTrade({
+      entry: primaryAnalysis.entry,
+      stopLoss: primaryAnalysis.stop,
+      takeProfit: primaryAnalysis.takeProfit,
+      direction,
+      confidence: primaryAnalysis.confidence,
+      rr: primaryAnalysis.riskReward,
+      createdAt: Date.now(),
+    });
+    handledForceNonceRef.current = forceNonce;
+  }, [activeTrade, closeTrade, cooldownUntil, forceNonce, isAuto, isLocked, isPaused, openTrade, primaryAnalysis]);
 
   useEffect(() => {
     const abortControllers: AbortController[] = [];
@@ -127,7 +388,7 @@ export default function AIAnalysis() {
           }
 
           const rawData = (await response.json()) as BinanceKlineResponse[];
-          const candles = rawData
+          const candles = getClosedBinanceKlines(rawData)
             .map(parseKline)
             .filter((candle): candle is AnalysisCandle => candle !== null);
 
@@ -138,7 +399,7 @@ export default function AIAnalysis() {
           candleHistoryRef.current[timeframe] = candles;
           const analysis = analyzeTimeframe(timeframe, candles);
 
-          if (analysis) {
+          if (analysis && !isPaused) {
             setResult(timeframe, analysis);
           }
         } catch (error) {
@@ -153,7 +414,16 @@ export default function AIAnalysis() {
       const cleanup = createBinanceKlineSocket({
         symbol,
         interval: timeframe,
-        onCandle: ({ candle }) => {
+        onCandle: ({ candle, isClosed }) => {
+          if (!isClosed) {
+            const chartOnly = true;
+            const doNotAnalyze = true;
+
+            if (chartOnly && doNotAnalyze) {
+              return;
+            }
+          }
+
           const parsedCandle = parseKline(candle);
 
           if (!parsedCandle || disposed) {
@@ -163,11 +433,21 @@ export default function AIAnalysis() {
           const nextCandles = upsertCandle(candleHistoryRef.current[timeframe] ?? [], parsedCandle);
           candleHistoryRef.current[timeframe] = nextCandles;
 
-          const analysis = analyzeTimeframe(timeframe, nextCandles);
-
-          if (analysis) {
-            setResult(timeframe, analysis);
+          if (isPaused) {
+            return;
           }
+
+          if (debounceTimersRef.current[timeframe]) {
+            window.clearTimeout(debounceTimersRef.current[timeframe]);
+          }
+
+          debounceTimersRef.current[timeframe] = window.setTimeout(() => {
+            const analysis = analyzeTimeframe(timeframe, candleHistoryRef.current[timeframe] ?? []);
+
+            if (analysis && !disposed) {
+              setResult(timeframe, analysis);
+            }
+          }, ANALYSIS_DEBOUNCE_MS);
         },
         onError: () => {
           if (!disposed) {
@@ -183,108 +463,122 @@ export default function AIAnalysis() {
       disposed = true;
       abortControllers.forEach((controller) => controller.abort());
       socketCleanups.forEach((cleanup) => cleanup());
+      Object.values(debounceTimersRef.current).forEach((timer) => {
+        if (timer) window.clearTimeout(timer);
+      });
+      debounceTimersRef.current = {};
     };
-  }, [setError, setLoading, setResult, symbol]);
+  }, [isPaused, setError, setLoading, setResult, symbol]);
+
+  if (headless) {
+    return null;
+  }
 
   return (
-    <section className="rounded-lg border border-slate-800 bg-slate-950/95 p-4">
-      <div className="mb-4 flex items-start justify-between gap-3">
+    <section className="rounded-lg border border-slate-800 bg-slate-950/95 p-3">
+      <div className="mb-3 flex items-center justify-between gap-2">
         <div>
-          <p className="text-xs uppercase tracking-[0.28em] text-slate-500">AI analysis</p>
-          <h2 className="mt-1 text-xl font-semibold text-white">{symbol}</h2>
-          <p className="mt-1 text-sm text-slate-400">Live multi-timeframe model</p>
+          <p className="text-xs uppercase tracking-[0.28em] text-slate-500">AI Analysis</p>
+          <h2 className="mt-1 text-sm font-semibold text-white">{symbol}</h2>
         </div>
-        <div className={`rounded-lg border px-3 py-2 text-right ${getSignalClasses(composite.signal)}`}>
-          <p className="text-[11px] uppercase tracking-[0.18em] opacity-75">Signal</p>
-          <p className="text-sm font-semibold">{isLoading ? "Scanning" : composite.signal}</p>
+        <div className={`rounded-lg border px-2 py-1 text-center ${getSignalClasses(composite.signal)}`}>
+          <p className="text-[10px] uppercase tracking-[0.18em] opacity-75">Signal</p>
+          <p className="text-xs font-semibold">{isLoading ? "..." : simplifySignal(composite.signal)}</p>
         </div>
       </div>
 
       {isLoading ? (
-        <div className="mb-4 grid gap-3">
-          {ANALYSIS_TIMEFRAMES.map((timeframe) => (
-            <div key={timeframe} className="h-24 animate-pulse rounded-lg bg-slate-900" />
-          ))}
+        <div className="rounded-lg border border-slate-800 bg-slate-900/50 px-3 py-2 text-center text-xs text-slate-400">
+          Scanning...
         </div>
-      ) : null}
-
-      {errorMessage ? (
-        <p className="mb-4 rounded-lg border border-amber-400/30 bg-amber-400/10 px-3 py-3 text-sm text-amber-100">
+      ) : errorMessage ? (
+        <p className="rounded-lg border border-amber-400/30 bg-amber-400/10 px-2 py-2 text-xs text-amber-100">
           {errorMessage}
         </p>
-      ) : null}
+      ) : !isLoading && orderedResults.length === 0 ? (
+        <p className="rounded-lg border border-slate-800 bg-slate-900/50 px-3 py-2 text-xs text-slate-400">
+          No analysis
+        </p>
+      ) : (
+        <div className="space-y-3">
+          <div className={`min-h-[60px] rounded-lg border p-3 text-center text-sm ${getSuggestedActionClasses(displaySignal)}`}>
+            <p className="text-[10px] uppercase tracking-[0.18em] opacity-75">Action</p>
+            <p className="mt-1 font-semibold">{displaySuggestedAction}</p>
+          </div>
 
-      <div className="mb-4 grid grid-cols-3 gap-2">
-        <div className="rounded-lg border border-slate-800 bg-[#020617] px-3 py-3">
-          <p className="text-[11px] uppercase tracking-[0.16em] text-slate-500">Strength</p>
-          <p className="mt-1 text-lg font-semibold text-white">{composite.strength}%</p>
-        </div>
-        <div className="rounded-lg border border-cyan-400/30 bg-cyan-400/10 px-3 py-3 text-cyan-100">
-          <p className="text-[11px] uppercase tracking-[0.16em] opacity-75">Confidence</p>
-          <p className="mt-1 text-lg font-semibold">{composite.confidence}%</p>
-        </div>
-        <div className="rounded-lg border border-violet-400/30 bg-violet-400/10 px-3 py-3 text-violet-100">
-          <p className="text-[11px] uppercase tracking-[0.16em] opacity-75">Probability</p>
-          <p className="mt-1 text-lg font-semibold">{composite.probability}%</p>
-        </div>
-      </div>
-
-      <div className="grid gap-3">
-        {ANALYSIS_TIMEFRAMES.map((timeframe) => {
-          const analysis = results[timeframe];
-
-          return (
-            <div
-              key={timeframe}
-              className={`rounded-lg border p-3 ${
-                analysis ? getSignalClasses(analysis.signal) : "border-slate-800 bg-slate-900/70 text-slate-300"
-              }`}
-            >
-              <div className="mb-3 flex items-start justify-between gap-3">
-                <div>
-                  <p className="text-lg font-semibold text-white">{timeframe}</p>
-                  <p className={`mt-0.5 text-sm ${analysis ? getTrendTextClass(analysis.trend) : "text-slate-400"}`}>
-                    {analysis?.trend ?? "Loading"}
+          <div className="grid gap-3 text-sm [grid-template-columns:repeat(auto-fit,minmax(min(180px,100%),1fr))]">
+            {summaryMetrics.map((metric) => (
+              <div key={metric.label} className="min-h-[60px] rounded-lg border border-slate-800 bg-slate-900/50 p-3">
+                <p className="text-xs text-slate-400">{metric.label}</p>
+                {metric.badgeClassName ? (
+                  <p className={`mt-1 inline-block rounded border px-1.5 py-0.5 font-semibold ${metric.badgeClassName}`}>
+                    {metric.value}
                   </p>
-                </div>
-                <div className="text-right">
-                  <p className="text-sm font-semibold">{analysis?.signal ?? "Scanning"}</p>
-                  <p className="mt-0.5 text-xs opacity-75">{analysis ? `${analysis.probability}% score` : "--"}</p>
-                </div>
+                ) : (
+                  <p className={`mt-1 font-semibold ${metric.className ?? "text-white"}`}>{metric.value}</p>
+                )}
               </div>
+            ))}
+          </div>
 
-              <div className="grid grid-cols-2 gap-2 text-xs sm:grid-cols-3 lg:grid-cols-2">
-                <div className="rounded-md bg-slate-950/45 px-2 py-2">
-                  <p className="text-slate-400">Strength</p>
-                  <p className="mt-1 font-semibold text-white">{analysis ? `${analysis.strength}%` : "--"}</p>
+          {tradeMetrics.length > 0 ? (
+            <div className="grid gap-3 text-sm [grid-template-columns:repeat(auto-fit,minmax(min(180px,100%),1fr))]">
+              {tradeMetrics.map((metric) => (
+                <div key={metric.label} className="min-h-[60px] rounded-lg border border-slate-800 bg-[#020617] p-3">
+                  <p className="text-xs text-slate-400">{metric.label}</p>
+                  <p className="mt-1 font-semibold text-white">{metric.value}</p>
                 </div>
-                <div className="rounded-md bg-slate-950/45 px-2 py-2">
-                  <p className="text-slate-400">Confidence</p>
-                  <p className="mt-1 font-semibold text-white">{analysis ? `${analysis.confidence}%` : "--"}</p>
+              ))}
+            </div>
+          ) : null}
+
+          {indicatorMetrics.length > 0 ? (
+            <div className="grid gap-3 text-sm [grid-template-columns:repeat(auto-fit,minmax(min(180px,100%),1fr))]">
+              {indicatorMetrics.map((metric) => (
+                <div key={metric.label} className="min-h-[60px] rounded-lg border border-slate-800 bg-slate-900/50 p-3">
+                  <p className="text-xs text-slate-400">{metric.label}</p>
+                  <p className="mt-1 font-semibold text-white">{metric.value}</p>
                 </div>
-                <div className="rounded-md bg-slate-950/45 px-2 py-2">
-                  <p className="text-slate-400">Momentum</p>
-                  <p className={`mt-1 font-semibold ${analysis && analysis.momentum >= 0 ? "text-emerald-200" : "text-red-200"}`}>
-                    {analysis ? `${analysis.momentum >= 0 ? "+" : ""}${formatNumber(analysis.momentum)}%` : "--"}
-                  </p>
-                </div>
-                <div className="rounded-md bg-slate-950/45 px-2 py-2">
-                  <p className="text-slate-400">Volatility</p>
-                  <p className="mt-1 font-semibold text-white">{analysis ? `${formatNumber(analysis.volatility)}%` : "--"}</p>
-                </div>
-                <div className="rounded-md bg-slate-950/45 px-2 py-2">
-                  <p className="text-slate-400">RSI 14</p>
-                  <p className="mt-1 font-semibold text-white">{formatNumber(analysis?.rsi)}</p>
-                </div>
-                <div className="rounded-md bg-slate-950/45 px-2 py-2">
-                  <p className="text-slate-400">Last</p>
-                  <p className="mt-1 font-semibold text-white">{formatNumber(analysis?.lastClose, 4)}</p>
-                </div>
+              ))}
+            </div>
+          ) : null}
+
+          {displayReasons.length > 0 && (
+            <div className="rounded-lg border border-slate-800 bg-slate-900/50 px-2 py-2">
+              <p className="text-xs text-slate-400">
+                {primaryAnalysis?.action === "Wait" ? "Why" : "Why trade generated"}
+              </p>
+              <ul className="mt-1 space-y-1 text-xs text-slate-300">
+                {displayReasons.slice(0, 5).map((reason, index) => (
+                  <li key={index} className="flex items-start gap-1">
+                    <span className="text-emerald-300">-</span>
+                    <span className="line-clamp-1">{reason}</span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+
+          {passedSetupChecks.length > 0 ? (
+            <div className="rounded-lg border border-slate-800 bg-[#020617] px-2 py-2 text-xs">
+              <p className="text-slate-400">Trade gate</p>
+              <div className="mt-2 grid grid-cols-2 gap-1">
+                {passedSetupChecks.map(([label]) => (
+                  <span key={label as string} className="text-emerald-300">
+                    OK {label}
+                  </span>
+                ))}
               </div>
             </div>
-          );
-        })}
-      </div>
+          ) : null}
+
+          <div className="rounded-lg border border-slate-800 bg-slate-900/50 px-2 py-2 text-xs">
+            <p className="text-slate-400">Final</p>
+            <p className="mt-1 font-semibold text-white">ACTION: {displayAction}</p>
+            <p className="font-semibold text-white">CONFIDENCE: {primaryAnalysis?.confidence ?? composite.confidence}%</p>
+          </div>
+        </div>
+      )}
     </section>
   );
 }
