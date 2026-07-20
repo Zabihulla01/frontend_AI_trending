@@ -7,6 +7,7 @@ import { MarketSummary } from "@/components/layout/MarketSummary";
 import MarketStatsRow from "@/components/layout/MarketStatsRow";
 import { NewsTab } from "@/components/layout/NewsTab";
 import TradeSetupPanel from "@/components/layout/TradeSetupPanel";
+import AIPositionManager from "@/components/position-manager/AIPositionManager";
 import Watchlist from "@/components/watchlist/Watchlist";
 import styles from "./page.module.css";
 
@@ -35,6 +36,7 @@ export default function Home() {
 
         <aside className={styles.centerColumn} aria-label="Trade setup">
           <TradeSetupPanel />
+          <AIPositionManager />
         </aside>
 
         <aside className={styles.rightColumn} aria-label="Analysis and watchlist">

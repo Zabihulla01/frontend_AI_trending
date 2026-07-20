@@ -1,6 +1,65 @@
 export const BINANCE_BASE_URL = "https://api.binance.com/api/v3";
+const BINANCE_BASE_URLS = [
+  BINANCE_BASE_URL,
+  "https://api1.binance.com/api/v3",
+  "https://api2.binance.com/api/v3",
+] as const;
+const REQUEST_TIMEOUT_MS = 7_000;
+const CACHE_TTL_MS = 5_000;
+const STALE_CACHE_TTL_MS = 10 * 60_000;
 const VALID_SYMBOL = /^[A-Z0-9]{5,20}$/;
 const VALID_INTERVAL = /^(1m|3m|5m|15m|30m|1h|2h|4h|6h|8h|12h|1d|3d|1w|1M)$/;
+
+interface CacheEntry<T> {
+  value: T;
+  expiresAt: number;
+  staleUntil: number;
+}
+
+const responseCache = new Map<string, CacheEntry<unknown>>();
+
+function getCached<T>(key: string, allowStale = false): T | null {
+  const entry = responseCache.get(key) as CacheEntry<T> | undefined;
+
+  if (!entry || (allowStale ? entry.staleUntil : entry.expiresAt) <= Date.now()) {
+    return null;
+  }
+
+  return entry.value;
+}
+
+function setCached<T>(key: string, value: T, ttlMs = CACHE_TTL_MS) {
+  const now = Date.now();
+  responseCache.set(key, {
+    value,
+    expiresAt: now + ttlMs,
+    staleUntil: now + Math.max(ttlMs, STALE_CACHE_TTL_MS),
+  });
+}
+
+async function fetchBinanceJson(path: string): Promise<unknown> {
+  let lastError: unknown;
+
+  for (const baseUrl of BINANCE_BASE_URLS) {
+    try {
+      const response = await fetch(`${baseUrl}${path}`, {
+        headers: { Accept: "application/json" },
+        cache: "no-store",
+        signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+      });
+
+      if (!response.ok) {
+        throw new Error(`Binance request failed with status ${response.status}`);
+      }
+
+      return response.json();
+    } catch (error) {
+      lastError = error;
+    }
+  }
+
+  throw lastError instanceof Error ? lastError : new Error("Binance request failed");
+}
 
 export type BinanceKlineResponse = [
   number,
@@ -66,23 +125,31 @@ export async function fetchBinanceKlines(
     interval: normalizedInterval,
     limit: String(safeLimit),
   });
-  const url = `${BINANCE_BASE_URL}/klines?${params.toString()}`;
-  const response = await fetch(url, {
-    headers: { Accept: "application/json" },
-    next: { revalidate: 10 },
-  });
+  const cacheKey = `klines:${params.toString()}`;
+  const cached = getCached<BinanceKlineResponse[]>(cacheKey);
 
-  if (!response.ok) {
-    throw new Error(`Binance request failed with status ${response.status}`);
+  if (cached) {
+    return cached;
   }
 
-  const data = (await response.json()) as unknown;
+  let data: unknown;
+  try {
+    data = await fetchBinanceJson(`/klines?${params.toString()}`);
+  } catch (error) {
+    const stale = getCached<BinanceKlineResponse[]>(cacheKey, true);
+    if (stale) {
+      return stale;
+    }
+    throw error;
+  }
 
   if (!Array.isArray(data)) {
     throw new Error("Unexpected Binance response");
   }
 
-  return data as BinanceKlineResponse[];
+  const klines = data as BinanceKlineResponse[];
+  setCached(cacheKey, klines);
+  return klines;
 }
 
 export async function searchBinanceSymbols(
@@ -100,19 +167,16 @@ export async function searchBinanceSymbols(
     return [];
   }
 
-  const response = await fetch(`${BINANCE_BASE_URL}/exchangeInfo`, {
-    headers: { Accept: "application/json" },
-    next: { revalidate: 60 * 60 },
-  });
-
-  if (!response.ok) {
-    throw new Error(`Binance exchangeInfo failed with status ${response.status}`);
-  }
-
-  const data = (await response.json()) as BinanceExchangeInfoResponse;
+  const cacheKey = "exchange-info";
+  const cached = getCached<BinanceExchangeInfoResponse>(cacheKey);
+  const data = cached ?? (await fetchBinanceJson("/exchangeInfo")) as BinanceExchangeInfoResponse;
 
   if (!Array.isArray(data.symbols)) {
     throw new Error("Unexpected Binance exchangeInfo response");
+  }
+
+  if (!cached) {
+    setCached(cacheKey, data, 60 * 60_000);
   }
 
   return data.symbols

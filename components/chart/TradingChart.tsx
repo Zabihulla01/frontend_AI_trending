@@ -25,6 +25,7 @@ import {
 import { createBinanceKlineSocket } from "@/services/websocket";
 import { useIndicatorStore } from "@/store/useIndicatorStore";
 import { useMarketStore } from "@/store/useMarketStore";
+import { usePositionManagerStore } from "@/store/usePositionManagerStore";
 import { formatRiskInput, parseRiskNumber, useRiskStore } from "@/store/useRiskStore";
 import { useTradeStore } from "@/store/useTradeStore";
 
@@ -312,7 +313,10 @@ function TradingChart() {
       }
 
       const baseOptions = {
-        autoSize: true,
+        // Dimensions are maintained by the ResizeObserver below. Explicitly
+        // disabling auto-size prevents lightweight-charts from warning when
+        // width and height are also supplied.
+        autoSize: false,
         layout: {
           background: { color: "#020617" },
           textColor: "#cbd5e1",
@@ -634,16 +638,32 @@ function TradingChart() {
     candleSeriesRef.current?.update(candle);
     setCandles(nextCandles);
 
+    // Additive fan-out: the Position Manager reuses this chart stream and never alters chart, signal, or order logic.
+    const positionManager = usePositionManagerStore.getState();
+    positionManager.updateMarketPrice({ symbol, timeframe: interval, price: candle.close });
+
     if (closedCandle) {
       const nextClosedCandles = upsertCandle(closedCandlesRef.current, closedCandle);
       closedCandlesRef.current = nextClosedCandles;
       setClosedCandles(nextClosedCandles);
       tickTradeAge(Number(closedCandle.time));
+      positionManager.processCompletedCandle({
+        symbol,
+        timeframe: interval,
+        candles: nextClosedCandles.map((item) => ({
+          time: Number(item.time),
+          open: item.open,
+          high: item.high,
+          low: item.low,
+          close: item.close,
+          volume: item.volume,
+        })),
+      });
     }
 
     setIsLive(true);
     setSocketError(null);
-  }, [tickTradeAge]);
+  }, [interval, symbol, tickTradeAge]);
 
   const scheduleLiveCandle = useCallback(
     (candle: CandlePoint, isClosed: boolean) => {

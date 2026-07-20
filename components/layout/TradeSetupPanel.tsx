@@ -1,6 +1,9 @@
 "use client";
 
 import { useMemo } from "react";
+import { useAnalysisStore } from "@/store/useAnalysisStore";
+import { useMarketStore } from "@/store/useMarketStore";
+import { getPositionKey, usePositionManagerStore } from "@/store/usePositionManagerStore";
 import { calculateRisk, useRiskStore } from "@/store/useRiskStore";
 import styles from "./TradeSetupPanel.module.css";
 
@@ -70,6 +73,10 @@ function getConfidenceThrottle(confidence: number | null | undefined) {
 }
 
 export default function TradeSetupPanel() {
+  const symbol = useMarketStore((state) => state.symbol);
+  const interval = useMarketStore((state) => state.interval);
+  const analysisResults = useAnalysisStore((state) => state.results);
+  const lockPosition = usePositionManagerStore((state) => state.lockPosition);
   const accountBalance = useRiskStore((state) => state.accountBalance);
   const riskPercentage = useRiskStore((state) => state.riskPercentage);
   const entryPrice = useRiskStore((state) => state.entryPrice);
@@ -82,6 +89,8 @@ export default function TradeSetupPanel() {
   const targetLockReason = useRiskStore((state) => state.targetLockReason);
   const recalculateMode = useRiskStore((state) => state.recalculateMode);
   const confidence = useRiskStore((state) => state.confidence);
+  const positionKey = getPositionKey(symbol, interval);
+  const lockedPosition = usePositionManagerStore((state) => state.positions[positionKey] ?? null);
   const inputs = useMemo(
     () => ({ accountBalance, riskPercentage, entryPrice, stopLoss, takeProfit, atr, action }),
     [accountBalance, action, atr, entryPrice, riskPercentage, stopLoss, takeProfit]
@@ -99,6 +108,42 @@ export default function TradeSetupPanel() {
   const invalidReason = hasDirectionalSetup
     ? result.warning ?? "Rejected because reward does not justify risk"
     : targetLockReason || "NO TRADE";
+  const lockLevels = useMemo(
+    () => ({
+      entry: parseDisplayNumber(entryPrice),
+      stopLoss: parseDisplayNumber(stopLoss),
+      tp1: parseDisplayNumber(takeProfit),
+      tp2: parseDisplayNumber(takeProfit2),
+    }),
+    [entryPrice, stopLoss, takeProfit, takeProfit2]
+  );
+  const canLockTrade = lockLevels.entry !== null && lockLevels.stopLoss !== null && lockLevels.tp1 !== null;
+  const currentPrice = useMemo(() => {
+    const matchingTimeframe = Object.values(analysisResults).find((analysis) => analysis?.timeframe === interval);
+    const latestAnalysis = matchingTimeframe ?? Object.values(analysisResults).find((analysis) => analysis !== undefined);
+
+    return latestAnalysis && Number.isFinite(latestAnalysis.lastClose) ? latestAnalysis.lastClose : null;
+  }, [analysisResults, interval]);
+  const isPositionActive = lockedPosition?.status === "ACTIVE";
+
+  const handleLockTrade = () => {
+    if (!canLockTrade || lockLevels.entry === null || lockLevels.stopLoss === null || lockLevels.tp1 === null) {
+      return;
+    }
+
+    lockPosition({
+      symbol,
+      timeframe: interval,
+      direction: action === "Long" ? "LONG" : "SHORT",
+      entry: lockLevels.entry,
+      stopLoss: lockLevels.stopLoss,
+      tp1: lockLevels.tp1,
+      tp2: lockLevels.tp2,
+      currentPrice: currentPrice ?? lockLevels.entry,
+      quantity: adjustedPositionSize > 0 ? adjustedPositionSize : undefined,
+      lockedAt: Date.now(),
+    });
+  };
 
   return (
     <section className={styles.panel}>
@@ -140,6 +185,24 @@ export default function TradeSetupPanel() {
           ) : null}
 
           <p className={styles.reason}>Reason: {targetLockReason}</p>
+
+          {canLockTrade ? (
+            <div className={styles.lockAction}>
+              <button
+                type="button"
+                onClick={handleLockTrade}
+                disabled={isPositionActive}
+                className={`${styles.lockButton} ${isPositionActive ? styles.lockedButton : ""}`}
+              >
+                {isPositionActive ? "Trade Locked" : "Lock Trade"}
+              </button>
+              <p className={styles.lockNote}>
+                {isPositionActive
+                  ? "This setup snapshot is being monitored by the AI Position Manager."
+                  : "Locks this setup for assistant-only monitoring. No order will be placed."}
+              </p>
+            </div>
+          ) : null}
         </>
       )}
     </section>
