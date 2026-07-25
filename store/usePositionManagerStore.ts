@@ -158,7 +158,7 @@ export const usePositionManagerStore = create<PositionManagerState>()(
             trailingActive: false,
             timeline: [
               createEvent("TRADE_LOCKED", "Trade locked for assistant-only monitoring.", now),
-              createEvent("TRADE_STARTED", "Position monitoring started. No order was sent.", now),
+              createEvent("TRADE_STARTED", "Position monitoring started. No order was sent.", now + 1000),
             ],
             notifications: [],
             lastRecommendation: createInitialRecommendation(basePosition, now),

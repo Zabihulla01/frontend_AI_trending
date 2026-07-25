@@ -101,10 +101,8 @@ export default function TradeSetupPanel() {
   const directionLabel = getDirectionLabel(action);
   const confidenceThrottle = getConfidenceThrottle(confidence);
   const adjustedPositionSize = result.positionSize * confidenceThrottle;
-  const throttleLabel =
-    confidenceThrottle < 1
-      ? `${Math.round(confidenceThrottle * 100)}% (${confidence ?? "--"}% confidence)`
-      : "Normal";
+  const throttleLabel = confidenceThrottle < 1 ? `${Math.round(confidenceThrottle * 100)}% of base size` : "Full size";
+  const confidenceLabel = confidence !== null && Number.isFinite(confidence) ? `${Math.round(confidence)}%` : "--";
   const invalidReason = hasDirectionalSetup
     ? result.warning ?? "Rejected because reward does not justify risk"
     : targetLockReason || "NO TRADE";
@@ -172,11 +170,12 @@ export default function TradeSetupPanel() {
           </div>
 
           <div className={styles.metrics}>
-            <Metric label="RR" value={result.riskRewardRatio > 0 ? formatNumber(result.riskRewardRatio) : "--"} />
+            <Metric label="Initial RR" value={result.riskRewardRatio > 0 ? formatNumber(result.riskRewardRatio) : "--"} />
             <Metric label="Position Size" value={formatNumber(adjustedPositionSize)} />
-            <Metric label="Risk Throttle" value={throttleLabel} />
+            <Metric label="Setup Confidence" value={confidenceLabel} />
+            <Metric label="Size Adjustment" value={throttleLabel} />
             <Metric label="Trade Quality" value={getTradeQuality(result.riskRewardRatio)} />
-            <Metric label="State" value="LOCKED" />
+            <Metric label="Setup State" value="LOCKED" />
             <Metric label="Recalculate" value={recalculateMode} />
           </div>
 

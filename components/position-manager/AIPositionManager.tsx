@@ -134,6 +134,7 @@ function formatTimestamp(timestamp: unknown) {
     day: "numeric",
     hour: "numeric",
     minute: "2-digit",
+    second: "2-digit",
   }).format(new Date(timestamp));
 }
 
@@ -193,6 +194,14 @@ function isStopMoveRecommendation(recommendation: string | undefined) {
 function getStopActionCopy(recommendation: string | undefined) {
   const normalized = recommendation?.replace(/\s+/g, "_").toUpperCase() ?? "";
   return normalized.includes("TRAIL") ? "Record trailing-stop suggestion" : "Record breakeven-stop suggestion";
+}
+
+function getRecommendationCopy(recommendation: string | undefined, isActive: boolean) {
+  if (isActive && recommendation?.trim().toUpperCase() === "HOLD") {
+    return "HOLD — WAIT FOR STRUCTURE BREAK";
+  }
+
+  return humanize(recommendation);
 }
 
 function metricTone(value: number | null) {
@@ -258,7 +267,7 @@ export default function AIPositionManager() {
 
   const status = getStatus(position.status);
   const recommendation = position.lastRecommendation;
-  const recommendationLabel = humanize(recommendation?.recommendation);
+  const recommendationLabel = getRecommendationCopy(recommendation?.recommendation, position.status === "ACTIVE");
   const pnl = getPnl(position);
   const holdingMinutes = getHoldingMinutes(position, now);
   const isActive = position.status === "ACTIVE";
@@ -312,7 +321,11 @@ export default function AIPositionManager() {
         <Metric label="PnL %" value={formatPercent(pnl.percent)} tone={metricTone(pnl.percent)} />
         <Metric label="PnL amount" value={formatAmount(pnl.amount)} tone={metricTone(pnl.amount)} />
         <Metric label="Holding time" value={formatDuration(holdingMinutes)} />
-        <Metric label="Current RR" value={isFiniteNumber(recommendation?.currentRR) ? recommendation.currentRR.toFixed(2) : "--"} />
+        <Metric
+          label="Current R Multiple"
+          value={isFiniteNumber(recommendation?.currentRR) ? recommendation.currentRR.toFixed(2) : "--"}
+          description="Realized price movement measured against the original risk."
+        />
       </div>
 
       <div className={styles.levels} aria-label="Locked trade levels">
@@ -332,7 +345,7 @@ export default function AIPositionManager() {
             </h3>
           </div>
           <div className={styles.confidence}>
-            <span>Confidence</span>
+            <span>Guidance confidence</span>
             <strong>{isFiniteNumber(recommendation?.confidence) ? `${Math.round(recommendation.confidence)}%` : "--"}</strong>
           </div>
         </div>
@@ -413,9 +426,22 @@ export default function AIPositionManager() {
   );
 }
 
-function Metric({ label, value, tone = "neutral" }: { label: string; value: string; tone?: "positive" | "negative" | "neutral" }) {
+function Metric({
+  label,
+  value,
+  tone = "neutral",
+  description,
+}: {
+  label: string;
+  value: string;
+  tone?: "positive" | "negative" | "neutral";
+  description?: string;
+}) {
   return (
-    <div className={`${styles.metric} ${tone === "positive" ? styles.positiveMetric : tone === "negative" ? styles.negativeMetric : ""}`}>
+    <div
+      className={`${styles.metric} ${tone === "positive" ? styles.positiveMetric : tone === "negative" ? styles.negativeMetric : ""}`}
+      title={description}
+    >
       <p>{label}</p>
       <strong>{value}</strong>
     </div>

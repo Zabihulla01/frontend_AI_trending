@@ -1,4 +1,8 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# AI Trading Dashboard
+
+A Next.js dashboard for market data, charting, trade setup analysis, and position management.
+
+Project documentation is maintained in [`docs/`](docs/README.md).
 
 ## Getting Started
 
