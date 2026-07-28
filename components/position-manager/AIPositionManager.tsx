@@ -245,9 +245,9 @@ export default function AIPositionManager() {
       <section className={styles.panel} aria-labelledby="ai-position-manager-title">
         <div className={styles.header}>
           <div>
-            <p className={styles.eyebrow}>Assistant only</p>
-            <h2 id="ai-position-manager-title" className={styles.title}>
-              AI Position Manager
+          <p className={styles.eyebrow}>Stage 2 · Protection mode</p>
+          <h2 id="ai-position-manager-title" className={styles.title}>
+              Position Protection
             </h2>
           </div>
           <span className={`${styles.statusBadge} ${styles.inactive}`}>NO POSITION</span>
@@ -280,9 +280,9 @@ export default function AIPositionManager() {
     <section className={styles.panel} aria-labelledby="ai-position-manager-title">
       <div className={styles.header}>
         <div>
-          <p className={styles.eyebrow}>Assistant only</p>
+          <p className={styles.eyebrow}>Stage 2 · Protection mode</p>
           <h2 id="ai-position-manager-title" className={styles.title}>
-            AI Position Manager
+            Position Protection
           </h2>
           <p className={styles.positionIdentity}>
             {position.symbol} · {position.timeframe} · {position.direction}
@@ -313,7 +313,11 @@ export default function AIPositionManager() {
         </div>
       ) : null}
 
-      <p className={styles.statusDetail}>{status.detail}</p>
+      <p className={styles.statusDetail}>
+        {isActive
+          ? "Entry is locked. The assistant now focuses only on reducing loss and protecting profit from completed candles. No new entry signal is used."
+          : status.detail}
+      </p>
 
       <div className={styles.metrics}>
         <Metric label="Entry" value={formatPrice(position.entry)} />
@@ -339,7 +343,7 @@ export default function AIPositionManager() {
       <section className={styles.guidance} aria-labelledby="position-guidance-title">
         <div className={styles.guidanceHeader}>
           <div>
-            <p className={styles.sectionLabel}>Current recommendation</p>
+            <p className={styles.sectionLabel}>Protection decision</p>
             <h3 id="position-guidance-title" className={styles.recommendation}>
               {recommendationLabel}
             </h3>

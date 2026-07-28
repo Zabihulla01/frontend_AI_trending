@@ -341,10 +341,14 @@ export function evaluatePosition(position: ManagedPosition, candles: PositionCan
 
   let recommendation: PositionRecommendation = "HOLD";
   let suggestedStopLoss: number | null = null;
+  // Once a position is locked, protect it from completed-candle events. A weak
+  // indicator alone should not close the trade; require price-action evidence.
+  const protectionTrigger = structureBreak || reversalCandle;
+
   if (tp1Hit) {
     recommendation = "BOOK PARTIAL PROFIT";
     suggestedStopLoss = position.entry;
-  } else if (exitScore >= 68 && exitScore > holdScore + 12) {
+  } else if (protectionTrigger && exitScore >= 68 && exitScore > holdScore + 12) {
     recommendation = "EXIT NOW";
   } else if (currentRR >= 1.6 && trendStrength >= 60 && !position.trailingActive) {
     recommendation = "MOVE STOP LOSS TO TRAILING";

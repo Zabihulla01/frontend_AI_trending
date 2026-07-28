@@ -1,0 +1,34 @@
+.pipeline {
+  display: grid;
+  gap: 12px;
+  margin-bottom: 12px;
+  border: 1px solid #1b3150;
+  border-radius: 8px;
+  background: linear-gradient(145deg, rgba(10, 28, 51, 0.98), rgba(5, 11, 27, 0.98));
+  padding: 12px;
+}
+
+.pipelineHeader { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.eyebrow { margin: 0 0 3px; color: #61a6e8; font-size: 9px; font-weight: 700; letter-spacing: .18em; text-transform: uppercase; }
+.pipelineHeader h3 { margin: 0; color: #f5f9ff; font-size: 14px; }
+.stageCount { border: 1px solid #24456d; border-radius: 999px; padding: 4px 8px; color: #8cc5ff; font-size: 10px; font-weight: 800; }
+.track { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 3px; }
+.stage { position: relative; min-width: 0; }
+.node { position: relative; z-index: 1; display: grid; width: 24px; height: 24px; place-items: center; border: 1px solid #29405e; border-radius: 50%; background: #0b172b; color: #7e91ab; font-size: 10px; font-weight: 800; }
+.connector { position: absolute; top: 11px; left: 22px; width: calc(100% - 18px); height: 1px; background: #1c304a; }
+.stageCopy { display: grid; gap: 2px; margin-top: 6px; }
+.stageCopy strong { color: #8497b2; font-size: 10px; }
+.stageCopy span { overflow: hidden; color: #536985; font-size: 8px; line-height: 1.2; text-overflow: ellipsis; white-space: nowrap; }
+.complete .node { border-color: #00c889; background: rgba(0, 200, 137, .16); color: #5ef0bd; }
+.complete .connector { background: #00a873; }
+.complete .stageCopy strong { color: #b0f5d8; }
+.active .node { border-color: #f2bd36; background: rgba(242, 189, 54, .14); color: #ffd66d; box-shadow: 0 0 0 4px rgba(242, 189, 54, .08); }
+.active .stageCopy strong { color: #ffe29a; }
+.status { display: flex; align-items: center; gap: 7px; border: 1px solid rgba(242, 189, 54, .2); border-radius: 5px; background: rgba(242, 189, 54, .06); padding: 8px; color: #f5d477; font-size: 10px; }
+.pulse { width: 6px; height: 6px; flex: 0 0 auto; border-radius: 50%; background: #f2bd36; box-shadow: 0 0 0 4px rgba(242, 189, 54, .1); }
+.note { margin: 0; color: #637895; font-size: 9px; }
+
+@media (max-width: 520px) {
+  .track { grid-template-columns: repeat(3, minmax(0, 1fr)); row-gap: 12px; }
+  .connector { display: none; }
+}

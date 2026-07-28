@@ -2,15 +2,17 @@
   min-width: 0;
   min-height: 100vh;
   color: #eef4ff;
-  background: #020617;
+  background:
+    radial-gradient(circle at 38% -20%, rgba(33, 76, 137, 0.16), transparent 34rem),
+    #020617;
 }
 
 .workspace {
   display: grid;
-  grid-template-columns: minmax(560px, 1fr) minmax(260px, 280px) minmax(280px, 300px);
+  grid-template-columns: minmax(0, 1fr) minmax(290px, 320px) minmax(330px, 360px);
   align-items: start;
-  gap: 8px;
-  padding: 8px;
+  gap: 10px;
+  padding: 10px;
 }
 
 .leftColumn,
@@ -19,23 +21,46 @@
   display: flex;
   min-width: 0;
   flex-direction: column;
-  gap: 8px;
+  gap: 10px;
+}
+
+.rightColumn {
+  position: sticky;
+  top: 10px;
+  max-height: calc(100vh - 20px);
+}
+
+.managerPanel {
+  min-width: 0;
+  overflow: auto;
+  scrollbar-gutter: stable;
+}
+
+.logicHost {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  clip-path: inset(50%);
+  white-space: nowrap;
 }
 
 .chartPanel,
 .panel {
   min-width: 0;
   border: 1px solid #152238;
-  border-radius: 6px;
-  background: #050b1b;
+  border-radius: 8px;
+  background: rgba(5, 11, 27, 0.94);
+  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.14);
 }
 
 .chartPanel {
-  padding: 4px;
+  padding: 6px;
 }
 
 .panel {
-  padding: 10px;
+  padding: 12px;
 }
 
 .panelHeading {
@@ -68,6 +93,8 @@
   .rightColumn {
     grid-column: 2;
     grid-row: 2;
+    position: static;
+    max-height: none;
   }
 }
 
@@ -86,5 +113,9 @@
 
   .panel {
     padding: 9px;
+  }
+
+  .rightColumn {
+    position: static;
   }
 }

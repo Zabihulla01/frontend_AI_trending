@@ -34,13 +34,8 @@ export default function Home() {
           </section>
         </section>
 
-        <aside className={styles.centerColumn} aria-label="Trade setup">
+        <aside className={styles.centerColumn} aria-label="Trade setup and market analysis">
           <TradeSetupPanel />
-          <AIPositionManager />
-        </aside>
-
-        <aside className={styles.rightColumn} aria-label="Analysis and watchlist">
-          <AIAnalysis headless />
           <section className={styles.panel}>
             <CompactAIPanel />
           </section>
@@ -48,6 +43,15 @@ export default function Home() {
             <Watchlist />
           </section>
           <MarketSummary />
+        </aside>
+
+        <aside className={styles.rightColumn} aria-label="AI position manager">
+          <div className={styles.logicHost} aria-hidden="true">
+            <AIAnalysis headless />
+          </div>
+          <div className={styles.managerPanel}>
+            <AIPositionManager />
+          </div>
         </aside>
       </div>
     </main>
