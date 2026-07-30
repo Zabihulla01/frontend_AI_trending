@@ -1,9 +1,11 @@
 export const BINANCE_BASE_URL = "https://api.binance.com/api/v3";
 const BINANCE_BASE_URLS = [
+  process.env.BINANCE_API_BASE_URL,
   BINANCE_BASE_URL,
   "https://api1.binance.com/api/v3",
   "https://api2.binance.com/api/v3",
-] as const;
+  "https://data-api.binance.vision/api/v3",
+].filter((baseUrl, index, urls): baseUrl is string => Boolean(baseUrl) && urls.indexOf(baseUrl) === index);
 const REQUEST_TIMEOUT_MS = 7_000;
 const CACHE_TTL_MS = 5_000;
 const STALE_CACHE_TTL_MS = 10 * 60_000;
@@ -17,6 +19,7 @@ interface CacheEntry<T> {
 }
 
 const responseCache = new Map<string, CacheEntry<unknown>>();
+const inFlightRequests = new Map<string, Promise<unknown>>();
 
 function getCached<T>(key: string, allowStale = false): T | null {
   const entry = responseCache.get(key) as CacheEntry<T> | undefined;
@@ -38,7 +41,7 @@ function setCached<T>(key: string, value: T, ttlMs = CACHE_TTL_MS) {
 }
 
 async function fetchBinanceJson(path: string): Promise<unknown> {
-  let lastError: unknown;
+  const errors: string[] = [];
 
   for (const baseUrl of BINANCE_BASE_URLS) {
     try {
@@ -54,11 +57,11 @@ async function fetchBinanceJson(path: string): Promise<unknown> {
 
       return response.json();
     } catch (error) {
-      lastError = error;
+      errors.push(`${baseUrl}: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
 
-  throw lastError instanceof Error ? lastError : new Error("Binance request failed");
+  throw new Error(`Unable to reach Binance API. ${errors.join(" | ")}`);
 }
 
 export type BinanceKlineResponse = [
@@ -133,14 +136,25 @@ export async function fetchBinanceKlines(
   }
 
   let data: unknown;
+  let request = inFlightRequests.get(cacheKey);
+
+  if (!request) {
+    request = fetchBinanceJson(`/klines?${params.toString()}`);
+    inFlightRequests.set(cacheKey, request);
+  }
+
   try {
-    data = await fetchBinanceJson(`/klines?${params.toString()}`);
+    data = await request;
   } catch (error) {
     const stale = getCached<BinanceKlineResponse[]>(cacheKey, true);
     if (stale) {
       return stale;
     }
     throw error;
+  } finally {
+    if (inFlightRequests.get(cacheKey) === request) {
+      inFlightRequests.delete(cacheKey);
+    }
   }
 
   if (!Array.isArray(data)) {

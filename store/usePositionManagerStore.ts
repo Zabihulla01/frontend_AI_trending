@@ -52,6 +52,7 @@ interface PositionManagerState {
 
 const MAX_TIMELINE_EVENTS = 60;
 const MAX_NOTIFICATIONS = 12;
+const clamp = (value: number, min: number, max: number) => Math.min(Math.max(value, min), max);
 
 function createId(prefix: string, timestamp = Date.now()) {
   return `${prefix}-${timestamp}-${Math.random().toString(36).slice(2, 8)}`;
@@ -75,25 +76,38 @@ function createInitialRecommendation(position: Pick<ManagedPosition, "entry" | "
   const directionMultiplier = position.direction === "LONG" ? 1 : -1;
   const move = (position.currentPrice - position.entry) * directionMultiplier;
   const pnl = move * position.quantity;
+  const currentRR = risk > 0 ? move / risk : 0;
+  const holdScore = Math.round(clamp(50 + currentRR * 18, 18, 82));
+  const exitScore = Math.round(clamp(50 - currentRR * 18, 18, 82));
+  const confidence = Math.round(clamp(50 + Math.abs(currentRR) * 10, 50, 72));
 
   return {
     recommendation: "HOLD" as const,
-    confidence: 50,
-    exitScore: 50,
-    holdScore: 50,
+    confidence,
+    exitScore,
+    holdScore,
     currentProfit: Math.max(0, pnl),
     currentLoss: Math.max(0, -pnl),
-    currentRR: risk > 0 ? move / risk : 0,
+    currentRR,
     holdingTime: 0,
     marketHealth: 50,
     trendStrength: 50,
     reasoning: [
-      "Trade snapshot locked.",
-      "Guidance will update after the next completed candle using the available market data.",
+      "Trade snapshot locked; scores are based on price versus entry until candle data is available.",
+      "Full protection guidance will update after the next completed candle.",
     ],
     generatedAt: now,
     suggestedStopLoss: null,
   };
+}
+
+function isInitialRecommendation(position: ManagedPosition) {
+  const recommendation = position.lastRecommendation;
+  return Boolean(
+    recommendation &&
+      recommendation.recommendation === "HOLD" &&
+      recommendation.generatedAt <= position.lockedAt + 1000
+  );
 }
 
 function makeRecommendationNotification(position: ManagedPosition, recommendation: PositionRecommendationSnapshot, timestamp: number): PositionNotification {
@@ -113,13 +127,27 @@ export const usePositionManagerStore = create<PositionManagerState>()(
       positions: {},
       getPositionKey: createPositionKey,
       lockPosition: (input) => {
+        const validDirection = input.direction === "LONG" || input.direction === "SHORT";
+        const validLongLevels =
+          input.direction === "LONG" &&
+          input.stopLoss < input.entry &&
+          input.tp1 > input.entry &&
+          (input.tp2 === null || input.tp2 === undefined || input.tp2 > input.tp1);
+        const validShortLevels =
+          input.direction === "SHORT" &&
+          input.stopLoss > input.entry &&
+          input.tp1 < input.entry &&
+          (input.tp2 === null || input.tp2 === undefined || input.tp2 < input.tp1);
+
         if (
           !input.symbol.trim() ||
           !input.timeframe.trim() ||
+          !validDirection ||
           !isValidPrice(input.entry) ||
           !isValidPrice(input.stopLoss) ||
           !isValidPrice(input.tp1) ||
-          input.entry === input.stopLoss
+          input.entry === input.stopLoss ||
+          (!validLongLevels && !validShortLevels)
         ) {
           return null;
         }
@@ -178,7 +206,16 @@ export const usePositionManagerStore = create<PositionManagerState>()(
           const position = state.positions[key];
           if (!position || position.status !== "ACTIVE" || position.currentPrice === price) return state;
 
-          return { positions: { ...state.positions, [key]: { ...position, currentPrice: price } } };
+          const nextRecommendation = isInitialRecommendation(position)
+            ? createInitialRecommendation({ ...position, currentPrice: price }, position.lockedAt)
+            : position.lastRecommendation;
+
+          return {
+            positions: {
+              ...state.positions,
+              [key]: { ...position, currentPrice: price, lastRecommendation: nextRecommendation },
+            },
+          };
         });
       },
       processCompletedCandle: ({ symbol, timeframe, candles }) => {

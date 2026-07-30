@@ -209,6 +209,16 @@ function metricTone(value: number | null) {
   return value > 0 ? "positive" : "negative";
 }
 
+function getGuidanceConfidence(recommendation: RecommendationView | null | undefined) {
+  if (!recommendation || !isFiniteNumber(recommendation.exitScore) || !isFiniteNumber(recommendation.holdScore)) {
+    return isFiniteNumber(recommendation?.confidence) ? Math.round(recommendation.confidence) : null;
+  }
+
+  const scoreGap = Math.abs(recommendation.holdScore - recommendation.exitScore);
+  const recommendationBoost = recommendation.recommendation?.toUpperCase() === "HOLD" ? 0 : 8;
+  return Math.round(Math.min(94, Math.max(45, 48 + scoreGap * 0.52 + recommendationBoost)));
+}
+
 export default function AIPositionManager() {
   const symbol = useMarketStore((state) => state.symbol);
   const interval = useMarketStore((state) => state.interval);
@@ -270,11 +280,15 @@ export default function AIPositionManager() {
   const recommendationLabel = getRecommendationCopy(recommendation?.recommendation, position.status === "ACTIVE");
   const pnl = getPnl(position);
   const holdingMinutes = getHoldingMinutes(position, now);
+  const liveRisk = Math.abs(position.entry - position.originalStopLoss);
+  const liveMove = (position.currentPrice - position.entry) * (position.direction === "SHORT" ? -1 : 1);
+  const liveRR = liveRisk > 0 ? liveMove / liveRisk : null;
   const isActive = position.status === "ACTIVE";
   const isConfirmingClose = closeConfirmationKey === position.key;
   const canRecordStopSuggestion = isActive && isStopMoveRecommendation(recommendation?.recommendation);
   const statusClass = styles[status.className] ?? styles.closed;
   const reason = getReasoning(recommendation);
+  const guidanceConfidence = getGuidanceConfidence(recommendation);
 
   return (
     <section className={styles.panel} aria-labelledby="ai-position-manager-title">
@@ -327,7 +341,7 @@ export default function AIPositionManager() {
         <Metric label="Holding time" value={formatDuration(holdingMinutes)} />
         <Metric
           label="Current R Multiple"
-          value={isFiniteNumber(recommendation?.currentRR) ? recommendation.currentRR.toFixed(2) : "--"}
+          value={isFiniteNumber(liveRR) ? liveRR.toFixed(2) : "--"}
           description="Realized price movement measured against the original risk."
         />
       </div>
@@ -350,7 +364,7 @@ export default function AIPositionManager() {
           </div>
           <div className={styles.confidence}>
             <span>Guidance confidence</span>
-            <strong>{isFiniteNumber(recommendation?.confidence) ? `${Math.round(recommendation.confidence)}%` : "--"}</strong>
+            <strong>{guidanceConfidence === null ? "--" : `${guidanceConfidence}%`}</strong>
           </div>
         </div>
 
