@@ -161,6 +161,9 @@ function TradingChart() {
   const [isLive, setIsLive] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [socketError, setSocketError] = useState<string | null>(null);
+  const [lastApiStatus, setLastApiStatus] = useState<number | null>(null);
+  const [lastApiLatency, setLastApiLatency] = useState<number | null>(null);
+  const [chartRequestCount, setChartRequestCount] = useState(0);
   const [showSma20, setShowSma20] = useState(true);
   const [showSma50, setShowSma50] = useState(true);
   const [showRsi, setShowRsi] = useState(true);
@@ -507,11 +510,17 @@ function TradingChart() {
     setSocketError(null);
 
     async function loadCandles() {
+      const requestStartedAt = performance.now();
+      setChartRequestCount((count) => count + 1);
+
       try {
         const response = await fetch(
           `/api/klines?symbol=${encodeURIComponent(symbol)}&interval=${encodeURIComponent(interval)}&limit=${HISTORY_LIMIT}`,
           { signal: abortController.signal }
         );
+
+        setLastApiStatus(response.status);
+        setLastApiLatency(Math.round(performance.now() - requestStartedAt));
 
         if (!response.ok) {
           throw new Error(`Server returned ${response.status}`);
@@ -537,6 +546,8 @@ function TradingChart() {
           return;
         }
 
+        setLastApiStatus((currentStatus) => currentStatus ?? 502);
+        setLastApiLatency(Math.round(performance.now() - requestStartedAt));
         setIsLoading(false);
         setErrorMessage(error instanceof Error ? error.message : "Unable to load chart data");
       }
@@ -856,6 +867,31 @@ function TradingChart() {
     positionLevels.takeProfit !== null ? ["TP", formatNumber(positionLevels.takeProfit)] : null,
     positionRiskReward !== null ? ["RR", formatNumber(positionRiskReward, 2)] : null,
   ].filter((metric): metric is [string, string] => metric !== null);
+  const emaStructure =
+    indicators.latestEma20 === null || indicators.latestEma50 === null
+      ? "Awaiting data"
+      : indicators.latestEma20 >= indicators.latestEma50
+      ? "Bullish"
+      : "Bearish";
+  const marketRegime = indicators.latestAdx !== null && indicators.latestAdx >= 25 ? "Directional" : "Range / transition";
+  const momentumState =
+    indicators.latestMacd?.histogram === null || indicators.latestMacd?.histogram === undefined
+      ? "Awaiting data"
+      : indicators.latestMacd.histogram >= 0
+      ? "Positive"
+      : "Negative";
+  const volatilityState =
+    indicators.latestAtr === null || latestPrice === null
+      ? "Awaiting data"
+      : `${formatNumber((indicators.latestAtr / latestPrice) * 100, 2)}% ATR`;
+  const signalRead =
+    emaStructure === "Bullish" && momentumState === "Positive"
+      ? "Trend aur momentum dono buyers ko support kar rahe hain."
+      : emaStructure === "Bullish" && momentumState === "Negative"
+      ? "Structure bullish hai, lekin momentum weak hai — confirmation ka wait karein."
+      : emaStructure === "Bearish" && momentumState === "Negative"
+      ? "Sellers active hain; breakdown se pehle volume confirmation zaroori hai."
+      : "Market mixed hai — range ke beech fresh entry avoid karein.";
 
   return (
     <div className="flex flex-col gap-3">
@@ -872,6 +908,31 @@ function TradingChart() {
               {socketError}
             </div>
           ) : null}
+        </div>
+      </div>
+
+      <div className="grid gap-2 rounded-lg border border-slate-800 bg-slate-950/70 p-2 text-[11px] text-slate-400 sm:grid-cols-4">
+        <div>
+          <span className="block uppercase tracking-[0.14em] text-slate-500">REST API</span>
+          <span className={errorMessage ? "font-semibold text-amber-300" : "font-semibold text-emerald-300"}>
+            {errorMessage ? "Unavailable" : isLoading ? "Checking" : "Healthy"}
+          </span>
+        </div>
+        <div>
+          <span className="block uppercase tracking-[0.14em] text-slate-500">Last response</span>
+          <span className="font-semibold text-slate-200">{lastApiStatus ?? "--"}</span>
+          {lastApiLatency !== null ? <span className="ml-1 text-slate-500">({lastApiLatency}ms)</span> : null}
+        </div>
+        <div>
+          <span className="block uppercase tracking-[0.14em] text-slate-500">Chart requests</span>
+          <span className="font-semibold text-slate-200">{chartRequestCount}</span>
+          <span className="ml-1 text-slate-500">local</span>
+        </div>
+        <div>
+          <span className="block uppercase tracking-[0.14em] text-slate-500">WebSocket</span>
+          <span className={isLive ? "font-semibold text-emerald-300" : "font-semibold text-amber-300"}>
+            {isLive ? "Connected" : "Connecting"}
+          </span>
         </div>
       </div>
 
@@ -922,59 +983,37 @@ function TradingChart() {
         <div ref={rsiChartContainerRef} className="h-[88px] w-full" />
       </div>
 
-      <div className="grid gap-3 text-sm [grid-template-columns:repeat(auto-fit,minmax(180px,1fr))]">
-        <div className="min-h-[60px] border border-slate-800 bg-slate-950 p-3">
-          <p className="text-xs uppercase tracking-[0.18em] text-slate-500">MACD</p>
-          <p className="mt-1 font-semibold text-white">
-            {formatNumber(indicators.latestMacd?.macd)} / {formatNumber(indicators.latestMacd?.signal)}
-          </p>
-          <p className="text-xs text-slate-400">Hist {formatNumber(indicators.latestMacd?.histogram)}</p>
+      <div className="border border-slate-800 bg-slate-950 p-3 text-xs">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div>
+            <p className="uppercase tracking-[0.18em] text-slate-500">Adaptive market state</p>
+            <p className="mt-1 font-semibold text-white">{marketRegime}</p>
+          </div>
+          <span className="rounded-md border border-slate-700 bg-slate-900 px-2 py-1 text-slate-300">
+            ADX {formatNumber(indicators.latestAdx)}
+          </span>
         </div>
-        <div className="min-h-[60px] border border-slate-800 bg-slate-950 p-3">
-          <p className="text-xs uppercase tracking-[0.18em] text-slate-500">Trend</p>
-          <p className="mt-1 font-semibold text-white">
-            EMA20 {formatNumber(indicators.latestEma20)} / EMA50 {formatNumber(indicators.latestEma50)}
-          </p>
-          <p className="text-xs text-slate-400">ADX {formatNumber(indicators.latestAdx)}</p>
+        <div className="mt-3 grid gap-2 sm:grid-cols-4">
+          <StateMetric label="Structure" value={emaStructure} />
+          <StateMetric label="Momentum" value={momentumState} />
+          <StateMetric label="Volatility" value={volatilityState} />
+          <StateMetric label="Volume context" value={`x${formatNumber(indicators.snapshot?.volumeSpike, 2)}`} />
         </div>
-        <div className="min-h-[60px] border border-slate-800 bg-slate-950 p-3">
-          <p className="text-xs uppercase tracking-[0.18em] text-slate-500">Volatility</p>
-          <p className="mt-1 font-semibold text-white">
-            ATR {formatNumber(indicators.latestAtr)} <span className="text-slate-500">/</span> VWAP {formatNumber(indicators.latestVwap)}
-          </p>
-        </div>
-        <div className="min-h-[60px] border border-slate-800 bg-slate-950 p-3">
-          <p className="text-xs uppercase tracking-[0.18em] text-slate-500">Levels</p>
-          <p className="mt-1 font-semibold text-white">
-            S {formatNumber(indicators.snapshot?.support)} / R {formatNumber(indicators.snapshot?.resistance)}
-          </p>
-          <p className="text-xs text-slate-400">Vol x{formatNumber(indicators.snapshot?.volumeSpike, 2)}</p>
+        <div className="mt-2 grid gap-2 border-t border-slate-800 pt-2 sm:grid-cols-[1fr_auto] sm:items-center">
+          <div className="min-w-0 rounded-md border border-slate-800 bg-[#071022] px-2 py-1.5">
+            <p className="text-[10px] uppercase tracking-[0.12em] text-slate-500">Signal read · Hinglish</p>
+            <p className="mt-0.5 text-xs font-semibold text-slate-200">{signalRead}</p>
+          </div>
+          <div className="rounded-md border border-amber-400/20 bg-amber-400/5 px-2 py-1.5 text-[10px] text-amber-200">
+            <span className="uppercase tracking-[0.12em] text-amber-300">Next step</span>
+            <p className="mt-0.5 font-semibold">Scenario zone se bahar close confirm hone dein.</p>
+          </div>
         </div>
       </div>
 
       <div className="grid gap-3 border border-slate-800 bg-slate-950 p-3 md:grid-cols-[auto_1fr] md:items-center">
-        <div className="flex gap-2">
-          <button
-            type="button"
-            onClick={() => setPositionSide("long")}
-            className={`px-3 py-2 text-xs font-semibold uppercase tracking-[0.16em] ${
-              positionSide === "long" ? "bg-emerald-400 text-slate-950" : "border border-slate-700 text-slate-300"
-            }`}
-          >
-            Long
-          </button>
-          <button
-            type="button"
-            onClick={() => setPositionSide("short")}
-            className={`px-3 py-2 text-xs font-semibold uppercase tracking-[0.16em] ${
-              positionSide === "short" ? "bg-red-400 text-slate-950" : "border border-slate-700 text-slate-300"
-            }`}
-          >
-            Short
-          </button>
-        </div>
         {positionMetrics.length > 0 ? (
-          <div className="grid gap-2 text-xs [grid-template-columns:repeat(auto-fit,minmax(180px,1fr))]">
+          <div className="grid gap-2 text-xs [grid-template-columns:repeat(auto-fit,minmax(180px,1fr))] md:col-span-2">
             {positionMetrics.map(([label, value]) => (
               <span key={label} className="text-slate-400">
                 {label} <b className="text-white">{value}</b>
@@ -989,6 +1028,15 @@ function TradingChart() {
           {errorMessage}
         </p>
       ) : null}
+    </div>
+  );
+}
+
+function StateMetric({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="min-w-0 rounded-md border border-slate-800 bg-[#071022] px-2 py-1.5">
+      <p className="truncate text-[10px] uppercase tracking-[0.12em] text-slate-500">{label}</p>
+      <p className="mt-0.5 truncate font-semibold text-slate-200">{value}</p>
     </div>
   );
 }

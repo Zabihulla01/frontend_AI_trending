@@ -506,6 +506,19 @@ export default function AIAnalysis({ headless = false }: { headless?: boolean } 
             <p className="mt-1 font-semibold">{displaySuggestedAction}</p>
           </div>
 
+          <div className="rounded-lg border border-slate-800 bg-[#020617] px-3 py-2 text-xs">
+            <div className="flex items-center justify-between gap-3">
+              <span className="uppercase tracking-[0.16em] text-slate-500">New trade decision</span>
+              <span className="font-semibold text-slate-200">{displaySuggestedAction}</span>
+            </div>
+            <div className="mt-1 flex items-center justify-between gap-3">
+              <span className="uppercase tracking-[0.16em] text-slate-500">Existing position</span>
+              <span className={activeTrade ? "font-semibold text-amber-300" : "font-semibold text-slate-400"}>
+                {activeTrade ? "Protection manager" : "None"}
+              </span>
+            </div>
+          </div>
+
           <div className="grid gap-3 text-sm [grid-template-columns:repeat(auto-fit,minmax(min(180px,100%),1fr))]">
             {summaryMetrics.map((metric) => (
               <div key={metric.label} className="min-h-[60px] rounded-lg border border-slate-800 bg-slate-900/50 p-3">

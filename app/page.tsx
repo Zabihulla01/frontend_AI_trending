@@ -5,7 +5,7 @@ import ChartContainer from "@/components/layout/ChartContainer";
 import Header from "@/components/layout/Header";
 import { MarketSummary } from "@/components/layout/MarketSummary";
 import MarketStatsRow from "@/components/layout/MarketStatsRow";
-import { NewsTab } from "@/components/layout/NewsTab";
+import MarketScenarios from "@/components/layout/MarketScenarios";
 import TradeSetupPanel from "@/components/layout/TradeSetupPanel";
 import AIPositionManager from "@/components/position-manager/AIPositionManager";
 import Watchlist from "@/components/watchlist/Watchlist";
@@ -17,7 +17,7 @@ export default function Home() {
       <Header />
 
       <div className={styles.workspace}>
-        <section className={styles.leftColumn} aria-label="Market chart and news">
+        <section className={styles.leftColumn} aria-label="Market chart and scenarios">
           <div className={styles.chartPanel}>
             <ChartContainer>
               <TradingChart />
@@ -27,9 +27,9 @@ export default function Home() {
           <MarketStatsRow />
 
           <section className={styles.panel}>
-            <PanelHeading title="News Feed" />
+            <PanelHeading title="Market Scenarios & Key Levels" />
             <div className={styles.newsViewport}>
-              <NewsTab />
+              <MarketScenarios />
             </div>
           </section>
         </section>
