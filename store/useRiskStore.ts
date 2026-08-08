@@ -155,8 +155,12 @@ export function recomputeTrigger(previous: TargetContext | null, current: Target
     return "Initial target generated";
   }
 
-  if (previous.action !== current.action || previous.signal !== current.signal) {
-    return "AI signal changes";
+  // Signal/confidence changes happen on almost every completed candle. They
+  // must not move a locked target. Only a real direction change is allowed to
+  // invalidate the snapshot here; structure triggers below are deliberately
+  // explicit and stable.
+  if (previous.action !== current.action && current.action !== "Wait") {
+    return "Direction change";
   }
 
   if (structureCrossed(previous, current)) {
@@ -416,6 +420,10 @@ export function calculateRisk(inputs: RiskInputs): RiskResult {
 
     if (!isLongSetup && !isShortSetup) {
       errors.push("Stop loss and take profit must be on opposite sides of entry.");
+    } else if (inputs.action === "Long" && !isLongSetup) {
+      errors.push("Long trades require stop loss below entry and take profit above entry.");
+    } else if (inputs.action === "Short" && !isShortSetup) {
+      errors.push("Short trades require stop loss above entry and take profit below entry.");
     }
   }
 
@@ -527,6 +535,28 @@ export const useRiskStore = create<RiskState>((set) => ({
 
       if (invalidReason !== null) {
 
+        // Keep a confirmed setup stable while the live analysis is briefly
+        // neutral or below the entry threshold. The next structure trigger
+        // will recalculate it through the branch below.
+        if (state.targetLocked && (action === state.action || action === "Wait")) {
+          const nextState = {
+            ...state,
+            ...plan,
+            action: state.action,
+            confidence,
+            entryPrice: state.entryPrice,
+            stopLoss: state.stopLoss,
+            takeProfit: state.takeProfit,
+            takeProfit2: state.takeProfit2,
+            targetLocked: true,
+            targetLockReason: state.targetLockReason || "Target confirmed; waiting for structure change",
+            recomputeReason: state.recomputeReason,
+            targetContext: state.targetContext,
+          };
+
+          return nextState;
+        }
+
         const nextState = {
           ...state,
           ...plan,
@@ -622,7 +652,20 @@ export const useRiskStore = create<RiskState>((set) => ({
         const trigger = recomputeTrigger(state.targetLocked ? state.targetContext : null, context);
 
         if (state.targetLocked && trigger === null) {
-          return state;
+          return {
+            ...state,
+            ...plan,
+            action: state.action,
+            confidence,
+            entryPrice: state.entryPrice,
+            stopLoss: state.stopLoss,
+            takeProfit: state.takeProfit,
+            takeProfit2: state.takeProfit2,
+            targetLocked: true,
+            targetLockReason: state.targetLockReason,
+            recomputeReason: state.recomputeReason,
+            targetContext: state.targetContext,
+          };
         }
 
         if (lastClose === null) {

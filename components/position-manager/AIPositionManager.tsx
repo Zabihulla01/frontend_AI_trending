@@ -209,6 +209,26 @@ function metricTone(value: number | null) {
   return value > 0 ? "positive" : "negative";
 }
 
+function getProtectionMetrics(position: PositionView) {
+  const directionMultiplier = position.direction === "SHORT" ? -1 : 1;
+  const riskPerUnit = Math.abs(position.entry - position.originalStopLoss);
+  const targetDistance = position.tp2 ?? position.tp1;
+  const favorableMove = (position.currentPrice - position.entry) * directionMultiplier;
+  const stopMove = (position.activeStopLoss - position.entry) * directionMultiplier;
+  const targetMove = targetDistance === null ? null : Math.abs(targetDistance - position.entry);
+  const initialRiskPercent = position.entry > 0 ? (riskPerUnit / position.entry) * 100 : null;
+  const activeRiskPercent = position.entry > 0 ? Math.max(0, -stopMove / position.entry) * 100 : null;
+  const targetPercent = position.entry > 0 && targetMove !== null ? (targetMove / position.entry) * 100 : null;
+  const targetProgress = targetMove && targetMove > 0 ? Math.max(0, Math.min(100, (favorableMove / targetMove) * 100)) : null;
+  const lockedProfitPercent = position.entry > 0 ? Math.max(0, stopMove / position.entry) * 100 : null;
+  const protectedPercent =
+    initialRiskPercent !== null && initialRiskPercent > 0 && activeRiskPercent !== null
+      ? Math.max(0, Math.min(100, (1 - activeRiskPercent / initialRiskPercent) * 100))
+      : null;
+
+  return { initialRiskPercent, activeRiskPercent, targetPercent, targetProgress, protectedPercent, lockedProfitPercent };
+}
+
 function getGuidanceConfidence(recommendation: RecommendationView | null | undefined) {
   if (!recommendation || !isFiniteNumber(recommendation.exitScore) || !isFiniteNumber(recommendation.holdScore)) {
     return isFiniteNumber(recommendation?.confidence) ? Math.round(recommendation.confidence) : null;
@@ -217,6 +237,51 @@ function getGuidanceConfidence(recommendation: RecommendationView | null | undef
   const scoreGap = Math.abs(recommendation.holdScore - recommendation.exitScore);
   const recommendationBoost = recommendation.recommendation?.toUpperCase() === "HOLD" ? 0 : 8;
   return Math.round(Math.min(94, Math.max(45, 48 + scoreGap * 0.52 + recommendationBoost)));
+}
+
+function getPositionStateCopy(pnlPercent: number | null) {
+  if (pnlPercent === null) {
+    return "Current position state is unavailable. Guidance is based on the latest completed candle.";
+  }
+
+  if (Math.abs(pnlPercent) < 0.1) {
+    return "Position is near breakeven. Hold guidance reflects completed-candle structure; it is not a guarantee of bullish continuation or profit.";
+  }
+
+  if (pnlPercent > 0) {
+    return `Position is currently up ${pnlPercent.toFixed(2)}%. Hold guidance reflects completed-candle structure, not a guarantee of continued gains.`;
+  }
+
+  return `Position is currently down ${Math.abs(pnlPercent).toFixed(2)}%. Hold guidance does not guarantee recovery; continue reviewing the active stop and market structure.`;
+}
+
+function getDecisionSummary(recommendation: string | undefined, holdScore: number | undefined, exitScore: number | undefined) {
+  const normalized = recommendation?.trim().toUpperCase();
+
+  if (normalized === "HOLD") {
+    const hold = isFiniteNumber(holdScore) ? Math.round(holdScore) : null;
+    const exit = isFiniteNumber(exitScore) ? Math.round(exitScore) : null;
+    const scores = hold !== null && exit !== null ? ` Hold support is ${hold}/100 versus exit pressure at ${exit}/100.` : "";
+    return {
+      label: "Recommended action: HOLD",
+      detail: `Do not close based on this snapshot alone.${scores} Continue monitoring for a structure break or stop-loss event.`,
+      tone: "hold",
+    } as const;
+  }
+
+  if (normalized === "EXIT NOW") {
+    return {
+      label: "Recommended action: EXIT REVIEW",
+      detail: "Exit pressure is elevated. Review the position and manually close or reduce exposure if your risk plan requires it.",
+      tone: "exit",
+    } as const;
+  }
+
+  return {
+    label: `Recommended action: ${humanize(recommendation)}`,
+    detail: "Use the recommendation as decision support and review the locked levels before taking any manual action.",
+    tone: "neutral",
+  } as const;
 }
 
 export default function AIPositionManager() {
@@ -289,6 +354,10 @@ export default function AIPositionManager() {
   const statusClass = styles[status.className] ?? styles.closed;
   const reason = getReasoning(recommendation);
   const guidanceConfidence = getGuidanceConfidence(recommendation);
+  const protection = getProtectionMetrics(position);
+  const protectionScore = isActive ? Math.round(protection.protectedPercent ?? 0) : 100;
+  const positionStateCopy = getPositionStateCopy(pnl.percent);
+  const decisionSummary = getDecisionSummary(recommendation?.recommendation, recommendation?.holdScore, recommendation?.exitScore);
 
   return (
     <section className={styles.panel} aria-labelledby="ai-position-manager-title">
@@ -344,12 +413,18 @@ export default function AIPositionManager() {
           value={isFiniteNumber(liveRR) ? liveRR.toFixed(2) : "--"}
           description="Realized price movement measured against the original risk."
         />
+        <Metric label="Initial risk" value={formatPercent(protection.initialRiskPercent)} tone="negative" description="Distance from entry to the original stop-loss." />
+        <Metric label="Active risk" value={formatPercent(protection.activeRiskPercent)} tone={protection.activeRiskPercent === 0 ? "positive" : "negative"} description="Remaining stop distance from entry after protection updates." />
+        <Metric label="Locked profit" value={formatPercent(protection.lockedProfitPercent)} tone={protection.lockedProfitPercent && protection.lockedProfitPercent > 0 ? "positive" : "neutral"} description="Profit secured if the active stop is reached, before fees or slippage." />
+         <Metric label="Risk protected" value={`${protectionScore}%`} tone={protectionScore >= 70 ? "positive" : "neutral"} description="Percentage of the original stop-loss risk removed by the active stop. This is separate from guidance confidence." />
       </div>
 
       <div className={styles.levels} aria-label="Locked trade levels">
         <Level label="TP2" value={formatPrice(position.tp2)} tone="positive" />
         <Level label="TP1" value={formatPrice(position.tp1)} tone="positive" />
         <Level label="Active SL" value={formatPrice(position.activeStopLoss)} tone="negative" />
+        <Level label="Target distance" value={formatPercent(protection.targetPercent)} tone="positive" />
+        <Level label="Target progress" value={formatPercent(protection.targetProgress)} tone="positive" />
         {position.trailingActive ? <span className={styles.trailingFlag}>TRAILING ACTIVE</span> : null}
         {position.tp1HitAt ? <span className={styles.tpFlag}>TP1 HIT</span> : null}
       </div>
@@ -363,9 +438,18 @@ export default function AIPositionManager() {
             </h3>
           </div>
           <div className={styles.confidence}>
-            <span>Guidance confidence</span>
+            <span title="How strongly the completed-candle signals agree with the current recommendation.">Guidance confidence</span>
             <strong>{guidanceConfidence === null ? "--" : `${guidanceConfidence}%`}</strong>
           </div>
+        </div>
+
+        <p className={styles.scoreLegend}>
+          Exit score measures exit pressure; hold score measures support for staying in the position. They are decision-support scores, not guaranteed probabilities. Guidance confidence measures signal agreement, while risk protected measures secured stop-loss risk. These metrics are independent.
+        </p>
+
+        <div className={`${styles.actionSummary} ${styles[decisionSummary.tone]}`}>
+          <strong>{decisionSummary.label}</strong>
+          <p>{decisionSummary.detail}</p>
         </div>
 
         <div className={styles.scoreGrid}>
@@ -373,6 +457,11 @@ export default function AIPositionManager() {
           <Score label="Hold score" value={recommendation?.holdScore} tone="positive" />
           <ContextMetric label="Market health" value={recommendation?.marketHealth} />
           <ContextMetric label="Trend strength" value={recommendation?.trendStrength} />
+        </div>
+
+        <div className={styles.positionState}>
+          <p className={styles.sectionLabel}>Current position state</p>
+          <p>{positionStateCopy}</p>
         </div>
 
         <div className={styles.reasoning}>
@@ -407,9 +496,12 @@ export default function AIPositionManager() {
             </div>
           ) : (
             <button type="button" className={styles.closeAction} onClick={() => setCloseConfirmationKey(position.key)}>
-              Close position
+              Close position manually
             </button>
           )}
+          {recommendation?.recommendation?.trim().toUpperCase() === "HOLD" && !isConfirmingClose ? (
+            <p className={styles.manualActionNote}>Manual close only stops dashboard monitoring; it is not the current HOLD recommendation.</p>
+          ) : null}
         </div>
       ) : null}
 

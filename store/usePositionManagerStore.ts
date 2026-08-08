@@ -308,6 +308,13 @@ export const usePositionManagerStore = create<PositionManagerState>()(
             return state;
           }
 
+          const stopImprovesProtection =
+            position.direction === "LONG"
+              ? suggestedStop > position.activeStopLoss && suggestedStop < position.currentPrice
+              : suggestedStop < position.activeStopLoss && suggestedStop > position.currentPrice;
+
+          if (!stopImprovesProtection) return state;
+
           const eventType: PositionEventType = isTrailing ? "TRAILING_ACTIVATED" : "SL_MOVED";
           const message = isTrailing
             ? "Trailing-stop suggestion recorded. Update any exchange order yourself."

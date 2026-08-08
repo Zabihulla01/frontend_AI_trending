@@ -34,7 +34,7 @@ export default function PositionPipeline() {
   const position = usePositionManagerStore((state) => state.positions[positionKey]);
 
   const analysis = useMemo(
-    () => results[interval as keyof typeof results] ?? Object.values(results).find((result) => result !== undefined),
+    () => results[interval as keyof typeof results],
     [interval, results]
   );
 

@@ -117,8 +117,7 @@ export default function TradeSetupPanel() {
   );
   const canLockTrade = lockLevels.entry !== null && lockLevels.stopLoss !== null && lockLevels.tp1 !== null;
   const currentPrice = useMemo(() => {
-    const matchingTimeframe = Object.values(analysisResults).find((analysis) => analysis?.timeframe === interval);
-    const latestAnalysis = matchingTimeframe ?? Object.values(analysisResults).find((analysis) => analysis !== undefined);
+    const latestAnalysis = analysisResults[interval as keyof typeof analysisResults];
 
     return latestAnalysis && Number.isFinite(latestAnalysis.lastClose) ? latestAnalysis.lastClose : null;
   }, [analysisResults, interval]);

@@ -11,6 +11,7 @@ type AnalysisStatus = "idle" | "loading" | "ready" | "error";
 
 interface AnalysisState {
   symbol: string;
+  interval: AnalysisTimeframe;
   status: AnalysisStatus;
   errorMessage: string | null;
   results: Partial<Record<AnalysisTimeframe, TimeframeAnalysis>>;
@@ -19,21 +20,23 @@ interface AnalysisState {
     market: MarketCondition;
     volatility: VolatilityState;
   } | null;
-  setLoading: (symbol: string) => void;
+  setLoading: (symbol: string, interval: AnalysisTimeframe) => void;
   setResult: (timeframe: AnalysisTimeframe, result: TimeframeAnalysis) => void;
   setError: (message: string) => void;
-  reset: (symbol: string) => void;
+  reset: (symbol: string, interval: AnalysisTimeframe) => void;
 }
 
 export const useAnalysisStore = create<AnalysisState>((set) => ({
   symbol: "BTCUSDT",
+  interval: "1h",
   status: "idle",
   errorMessage: null,
   results: {},
   marketState: null,
-  setLoading: (symbol) =>
+  setLoading: (symbol, interval) =>
     set({
       symbol,
+      interval,
       status: "loading",
       errorMessage: null,
       results: {},
@@ -58,9 +61,10 @@ export const useAnalysisStore = create<AnalysisState>((set) => ({
       status: "error",
       errorMessage: message,
     }),
-  reset: (symbol) =>
+  reset: (symbol, interval) =>
     set({
       symbol,
+      interval,
       status: "idle",
       errorMessage: null,
       results: {},

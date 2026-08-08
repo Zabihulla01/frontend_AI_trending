@@ -102,6 +102,34 @@ function isLevelHit(direction: PositionDirection, candle: PositionCandle, level:
   return kind === "target" ? candle.low <= level : candle.high >= level;
 }
 
+function isValidCandle(candle: PositionCandle) {
+  return (
+    Number.isFinite(candle.time) &&
+    Number.isFinite(candle.open) &&
+    Number.isFinite(candle.high) &&
+    Number.isFinite(candle.low) &&
+    Number.isFinite(candle.close) &&
+    Number.isFinite(candle.volume) &&
+    candle.high >= candle.low &&
+    candle.high >= candle.open &&
+    candle.high >= candle.close &&
+    candle.low <= candle.open &&
+    candle.low <= candle.close &&
+    candle.volume >= 0
+  );
+}
+
+function getMonotonicStop(position: ManagedPosition, candidate: number | null, currentPrice: number) {
+  if (!isPositive(candidate)) return null;
+
+  const isFavorable = position.direction === "LONG" ? candidate > position.activeStopLoss : candidate < position.activeStopLoss;
+  const isBeforeCurrentPrice = position.direction === "LONG" ? candidate < currentPrice : candidate > currentPrice;
+
+  // A protection update may only reduce risk. It must not move the stop through
+  // the current market price or undo a previously acknowledged stop move.
+  return isFavorable && isBeforeCurrentPrice ? candidate : null;
+}
+
 function getHoldingMinutes(position: ManagedPosition, candle: PositionCandle, now: number) {
   const candleTime = Number.isFinite(candle.time) ? candle.time * 1000 : now;
   return Math.max(0, Math.round((candleTime - position.lockedAt) / 60_000));
@@ -176,13 +204,7 @@ export function getPositionKey(symbol: string, timeframe: string) {
 
 export function evaluatePosition(position: ManagedPosition, candles: PositionCandle[], now = Date.now()): PositionEvaluation | null {
   const history = candles.filter(
-    (candle) =>
-      Number.isFinite(candle.time) &&
-      Number.isFinite(candle.open) &&
-      Number.isFinite(candle.high) &&
-      Number.isFinite(candle.low) &&
-      Number.isFinite(candle.close) &&
-      Number.isFinite(candle.volume)
+    isValidCandle
   );
   const candle = history.at(-1);
 
@@ -210,7 +232,7 @@ export function evaluatePosition(position: ManagedPosition, candles: PositionCan
       holdScore: 0,
       currentProfit: round(Math.max(0, pnl)),
       currentLoss: round(Math.max(0, -pnl)),
-      currentRR: round(currentRR),
+      currentRR: round(currentRR, 6),
       holdingTime,
       marketHealth: 0,
       trendStrength: 0,
@@ -244,7 +266,7 @@ export function evaluatePosition(position: ManagedPosition, candles: PositionCan
       holdScore: 5,
       currentProfit: round(Math.max(0, pnl)),
       currentLoss: round(Math.max(0, -pnl)),
-      currentRR: round(currentRR),
+      currentRR: round(currentRR, 6),
       holdingTime,
       marketHealth: 75,
       trendStrength: 75,
@@ -353,10 +375,10 @@ export function evaluatePosition(position: ManagedPosition, candles: PositionCan
   } else if (currentRR >= 1.6 && trendStrength >= 60 && !position.trailingActive) {
     recommendation = "MOVE STOP LOSS TO TRAILING";
     const trailDistance = snapshot.atr !== null && snapshot.atr > 0 ? snapshot.atr * 1.2 : Math.abs(price - position.entry) * 0.35;
-    suggestedStopLoss = round(price - directionMultiplier * trailDistance, 8);
+    suggestedStopLoss = getMonotonicStop(position, price - directionMultiplier * trailDistance, price);
   } else if (currentRR >= 0.9 && Math.abs(position.activeStopLoss - position.entry) > riskPerUnit * 0.08) {
     recommendation = "MOVE STOP LOSS TO BREAKEVEN";
-    suggestedStopLoss = position.entry;
+    suggestedStopLoss = getMonotonicStop(position, position.entry, price);
   }
 
   const confidence = Math.round(
@@ -369,7 +391,7 @@ export function evaluatePosition(position: ManagedPosition, candles: PositionCan
     holdScore,
     currentProfit: round(Math.max(0, pnl)),
     currentLoss: round(Math.max(0, -pnl)),
-    currentRR: round(currentRR),
+    currentRR: round(currentRR, 6),
     holdingTime,
     marketHealth,
     trendStrength,

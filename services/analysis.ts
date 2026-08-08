@@ -11,7 +11,7 @@ import {
 import { scoreMarket } from "@/services/scoring";
 import type { RiskLevel, ScoringCandle, Signal as ScoringSignal } from "@/services/scoring";
 
-export type AnalysisTimeframe = "1m" | "5m" | "15m" | "1h";
+export type AnalysisTimeframe = "1m" | "5m" | "15m" | "1h" | "4h" | "1d";
 export type AnalysisTrend = "Bullish" | "Bearish" | "Neutral";
 export type AnalysisSignal = "Strong Buy" | "Buy" | "Neutral" | "Sell" | "Strong Sell" | "Wait";
 export type MarketTrendState = "Trending" | "Sideways" | "Volatile";
@@ -83,7 +83,7 @@ export interface TimeframeAnalysis {
   updatedAt: number;
 }
 
-export const ANALYSIS_TIMEFRAMES: AnalysisTimeframe[] = ["1m", "5m", "15m", "1h"];
+export const ANALYSIS_TIMEFRAMES: AnalysisTimeframe[] = ["1m", "5m", "15m", "1h", "4h", "1d"];
 
 const MIN_CANDLES = 50;
 

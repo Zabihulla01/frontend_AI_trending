@@ -171,13 +171,17 @@ function getSuggestedActionClasses(signal: string) {
 
 export default function AIAnalysis({ headless = false }: { headless?: boolean } = {}) {
   const symbol = useMarketStore((state) => state.symbol);
+  const interval = useMarketStore((state) => state.interval) as AnalysisTimeframe;
   const status = useAnalysisStore((state) => state.status);
+  const analysisSymbol = useAnalysisStore((state) => state.symbol);
+  const analysisInterval = useAnalysisStore((state) => state.interval);
   const errorMessage = useAnalysisStore((state) => state.errorMessage);
   const results = useAnalysisStore((state) => state.results);
   const setLoading = useAnalysisStore((state) => state.setLoading);
   const setResult = useAnalysisStore((state) => state.setResult);
   const setError = useAnalysisStore((state) => state.setError);
   const applyTradePlan = useRiskStore((state) => state.applyTradePlan);
+  const resetRisk = useRiskStore((state) => state.reset);
   const activeTrade = useTradeStore((state) => state.activeTrade);
   const isAuto = useTradeStore((state) => state.isAuto);
   const isPaused = useTradeStore((state) => state.isPaused);
@@ -186,17 +190,23 @@ export default function AIAnalysis({ headless = false }: { headless?: boolean } 
   const forceNonce = useTradeStore((state) => state.forceNonce);
   const openTrade = useTradeStore((state) => state.openTrade);
   const closeTrade = useTradeStore((state) => state.closeTrade);
+  const resetTrade = useTradeStore((state) => state.resetTrade);
   const candleHistoryRef = useRef<Partial<Record<AnalysisTimeframe, AnalysisCandle[]>>>({});
   const debounceTimersRef = useRef<Partial<Record<AnalysisTimeframe, number>>>({});
   const handledForceNonceRef = useRef(forceNonce);
+  const marketKey = `${symbol}:${interval}`;
+  const readyForCurrentMarket =
+    analysisSymbol === symbol && analysisInterval === interval && status === "ready";
 
   const orderedResults = useMemo(
     () =>
-      Object.values(results).filter((result): result is TimeframeAnalysis => result !== undefined),
-    [results]
+      readyForCurrentMarket
+        ? Object.values(results).filter((result): result is TimeframeAnalysis => result !== undefined)
+        : [],
+    [readyForCurrentMarket, results]
   );
   const composite = useMemo(() => calculateCompositeSignal(orderedResults), [orderedResults]);
-  const primaryAnalysis = orderedResults[0] ?? null;
+  const primaryAnalysis = readyForCurrentMarket ? results[interval] ?? null : null;
   const displaySignal = primaryAnalysis ? simplifySignal(primaryAnalysis.signal) : simplifySignal(composite.signal);
   const displayRisk = primaryAnalysis?.risk ?? "Low";
   const displayTrend = primaryAnalysis?.trend ?? "Neutral";
@@ -215,6 +225,13 @@ export default function AIAnalysis({ headless = false }: { headless?: boolean } 
   const displayTradeQuality = primaryAnalysis?.tradeQuality ?? displayOpportunityScore;
   const displaySuggestedAction = primaryAnalysis?.suggestedAction ?? `${displayAction}: waiting for analysis`;
   const isLoading = status === "loading";
+
+  useEffect(() => {
+    // A setup/trade is not portable across symbols or timeframes. Position
+    // history remains stored by its own symbol/timeframe key.
+    resetRisk();
+    resetTrade();
+  }, [marketKey, resetRisk, resetTrade]);
   const summaryMetrics = [
     { label: "Confidence", value: `${primaryAnalysis?.confidence ?? composite.confidence}%` },
     { label: "Trend", value: displayTrend, className: getTrendTextClass(displayTrend) },
@@ -370,7 +387,7 @@ export default function AIAnalysis({ headless = false }: { headless?: boolean } 
     let disposed = false;
 
     candleHistoryRef.current = {};
-    setLoading(symbol);
+    setLoading(symbol, interval);
 
     ANALYSIS_TIMEFRAMES.forEach((timeframe) => {
       const abortController = new AbortController();
@@ -468,7 +485,7 @@ export default function AIAnalysis({ headless = false }: { headless?: boolean } 
       });
       debounceTimersRef.current = {};
     };
-  }, [isPaused, setError, setLoading, setResult, symbol]);
+  }, [interval, isPaused, setError, setLoading, setResult, symbol]);
 
   if (headless) {
     return null;

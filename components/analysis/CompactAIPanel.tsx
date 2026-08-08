@@ -1,6 +1,7 @@
 "use client";
 
 import { useAnalysisStore } from "@/store/useAnalysisStore";
+import { useRiskStore } from "@/store/useRiskStore";
 
 function signalTone(signal: string) {
   if (signal.includes("Buy") || signal === "Bullish" || signal === "Bull") return "text-emerald-400";
@@ -25,6 +26,12 @@ function displayActionText(action: string, suggestedAction: string) {
 export const CompactAIPanel = () => {
   const results = useAnalysisStore((state) => state.results);
   const status = useAnalysisStore((state) => state.status);
+  const targetLocked = useRiskStore((state) => state.targetLocked);
+  const targetLockReason = useRiskStore((state) => state.targetLockReason);
+  const recalculateMode = useRiskStore((state) => state.recalculateMode);
+  const entryPrice = useRiskStore((state) => state.entryPrice);
+  const stopLoss = useRiskStore((state) => state.stopLoss);
+  const takeProfit = useRiskStore((state) => state.takeProfit);
   const analysis = Object.values(results).find((result) => result !== undefined);
 
   if (!analysis) {
@@ -38,6 +45,13 @@ export const CompactAIPanel = () => {
 
   const reasoning = analysis.reasons.length > 0 ? analysis.reasons : [analysis.suggestedAction];
   const actionText = displayActionText(analysis.action, analysis.suggestedAction);
+  const entry = Number(entryPrice);
+  const stop = Number(stopLoss);
+  const target = Number(takeProfit);
+  const hasTargetLevels = [entry, stop, target].every((value) => Number.isFinite(value) && value > 0);
+  const stopPercent = hasTargetLevels ? (Math.abs(entry - stop) / entry) * 100 : null;
+  const targetPercent = hasTargetLevels ? (Math.abs(target - entry) / entry) * 100 : null;
+  const targetState = targetLocked && hasTargetLevels ? "CONFIRMED" : "WAITING";
 
   return (
     <section className="text-xs">
@@ -71,6 +85,19 @@ export const CompactAIPanel = () => {
       <div className="mt-2 space-y-2 rounded-md border border-slate-800 bg-[#071022] p-2">
         <ScoreBar label="Entry Quality" value={analysis.entryQuality} tone="bg-emerald-500" />
         <ScoreBar label="Trade Quality" value={analysis.tradeQuality} tone="bg-blue-500" />
+      </div>
+
+      <div className={`mt-2 rounded-md border p-2 ${targetState === "CONFIRMED" ? "border-emerald-500/30 bg-emerald-500/5" : "border-amber-400/30 bg-amber-400/5"}`}>
+        <div className="flex items-center justify-between gap-2">
+          <p className="text-[10px] uppercase tracking-[0.15em] text-slate-400">AI target confirmation</p>
+          <span className={targetState === "CONFIRMED" ? "font-bold text-emerald-300" : "font-bold text-amber-300"}>{targetState}</span>
+        </div>
+        <p className="mt-1 text-[11px] leading-4 text-slate-300">{targetLockReason || "Target requires structure confirmation."}</p>
+        <div className="mt-2 grid grid-cols-3 gap-1 text-[10px]">
+          <Metric label="Stop" value={stopPercent === null ? "--" : `${stopPercent.toFixed(2)}%`} tone="text-red-300" />
+          <Metric label="Target" value={targetPercent === null ? "--" : `${targetPercent.toFixed(2)}%`} tone="text-emerald-300" />
+          <Metric label="Refresh" value={recalculateMode.replace(" ONLY", "")} tone="text-blue-300" />
+        </div>
       </div>
 
       <div className="mt-2 rounded-md border border-slate-800 bg-[#071022] p-2">

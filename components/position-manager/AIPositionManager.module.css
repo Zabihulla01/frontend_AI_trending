@@ -298,6 +298,61 @@
   color: #fde68a;
 }
 
+.scoreLegend,
+.positionState > p:last-child {
+  color: #93a6c4;
+  font-size: 10px;
+  line-height: 1.45;
+}
+
+.scoreLegend {
+  margin-top: 8px;
+  border-left: 2px solid rgba(250, 204, 21, 0.45);
+  padding-left: 7px;
+}
+
+.actionSummary {
+  display: grid;
+  gap: 4px;
+  margin-top: 8px;
+  border: 1px solid rgba(20, 201, 148, 0.28);
+  border-radius: 4px;
+  background: rgba(16, 185, 129, 0.08);
+  padding: 8px;
+}
+
+.actionSummary strong {
+  color: #a7f3d0;
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.actionSummary p,
+.manualActionNote {
+  color: #cbd5e1;
+  font-size: 10px;
+  line-height: 1.45;
+}
+
+.actionSummary.exit {
+  border-color: rgba(248, 81, 103, 0.32);
+  background: rgba(248, 81, 103, 0.08);
+}
+
+.actionSummary.exit strong {
+  color: #fecdd3;
+}
+
+.actionSummary.neutral {
+  border-color: rgba(96, 165, 250, 0.24);
+  background: rgba(59, 130, 246, 0.06);
+}
+
+.actionSummary.neutral strong {
+  color: #bfdbfe;
+}
+
 .scoreGrid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -349,6 +404,19 @@
   font-size: 11px;
 }
 
+.positionState {
+  margin-top: 8px;
+  border: 1px solid rgba(250, 204, 21, 0.2);
+  border-radius: 4px;
+  background: rgba(250, 204, 21, 0.045);
+  padding: 8px;
+}
+
+.positionState > p:last-child {
+  margin-top: 5px;
+  color: #cbd5e1;
+}
+
 .reasoning {
   margin-top: 8px;
   border: 1px solid rgba(96, 165, 250, 0.18);
@@ -364,6 +432,13 @@
 .actions {
   align-items: stretch;
   flex-wrap: wrap;
+}
+
+.manualActionNote {
+  flex: 1 1 100%;
+  margin: 0;
+  color: #93a6c4;
+  text-align: right;
 }
 
 .secondaryAction,

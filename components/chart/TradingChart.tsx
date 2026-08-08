@@ -983,33 +983,38 @@ function TradingChart() {
         <div ref={rsiChartContainerRef} className="h-[88px] w-full" />
       </div>
 
-      <div className="border border-slate-800 bg-slate-950 p-3 text-xs">
-        <div className="flex flex-wrap items-center justify-between gap-2">
+      <section className="overflow-hidden rounded-lg border border-slate-800 bg-[linear-gradient(135deg,rgba(9,22,43,.98),rgba(4,10,24,.98))] text-xs shadow-[0_14px_32px_rgba(0,0,0,.12)]" aria-label="Adaptive market state">
+        <div className="flex flex-wrap items-start justify-between gap-3 border-b border-slate-800 px-3 py-3">
           <div>
-            <p className="uppercase tracking-[0.18em] text-slate-500">Adaptive market state</p>
-            <p className="mt-1 font-semibold text-white">{marketRegime}</p>
+            <div className="flex items-center gap-2">
+              <span className="h-1.5 w-1.5 rounded-full bg-sky-400 shadow-[0_0_9px_rgba(56,189,248,.8)]" />
+              <p className="uppercase tracking-[0.2em] text-slate-400">Adaptive market state</p>
+            </div>
+            <p className="mt-1.5 text-base font-semibold tracking-tight text-white">{marketRegime}</p>
+            <p className="mt-1 text-[11px] text-slate-500">Regime first, execution second. Let price prove the next move.</p>
           </div>
-          <span className="rounded-md border border-slate-700 bg-slate-900 px-2 py-1 text-slate-300">
-            ADX {formatNumber(indicators.latestAdx)}
-          </span>
+          <div className="rounded-md border border-sky-400/20 bg-sky-400/5 px-2.5 py-1.5 text-right">
+            <p className="text-[10px] uppercase tracking-[0.16em] text-slate-500">Trend strength</p>
+            <p className="mt-0.5 font-semibold text-sky-200">ADX {formatNumber(indicators.latestAdx)}</p>
+          </div>
         </div>
-        <div className="mt-3 grid gap-2 sm:grid-cols-4">
-          <StateMetric label="Structure" value={emaStructure} />
-          <StateMetric label="Momentum" value={momentumState} />
-          <StateMetric label="Volatility" value={volatilityState} />
-          <StateMetric label="Volume context" value={`x${formatNumber(indicators.snapshot?.volumeSpike, 2)}`} />
+        <div className="grid gap-2 p-3 sm:grid-cols-4">
+          <StateMetric label="Structure" value={emaStructure} hint="EMA alignment" tone={emaStructure === "Bullish" ? "positive" : emaStructure === "Bearish" ? "negative" : "neutral"} />
+          <StateMetric label="Momentum" value={momentumState} hint="MACD impulse" tone={momentumState === "Positive" ? "positive" : momentumState === "Negative" ? "negative" : "neutral"} />
+          <StateMetric label="Volatility" value={volatilityState} hint="ATR expansion" />
+          <StateMetric label="Volume context" value={`x${formatNumber(indicators.snapshot?.volumeSpike, 2)}`} hint="Relative activity" />
         </div>
-        <div className="mt-2 grid gap-2 border-t border-slate-800 pt-2 sm:grid-cols-[1fr_auto] sm:items-center">
-          <div className="min-w-0 rounded-md border border-slate-800 bg-[#071022] px-2 py-1.5">
+        <div className="grid gap-2 border-t border-slate-800 p-3 sm:grid-cols-[minmax(0,1fr)_minmax(240px,auto)] sm:items-stretch">
+          <div className="min-w-0 rounded-md border border-slate-800 bg-[#071022] px-3 py-2">
             <p className="text-[10px] uppercase tracking-[0.12em] text-slate-500">Signal read · Hinglish</p>
-            <p className="mt-0.5 text-xs font-semibold text-slate-200">{signalRead}</p>
+            <p className="mt-1 text-xs font-semibold leading-5 text-slate-200">{signalRead}</p>
           </div>
-          <div className="rounded-md border border-amber-400/20 bg-amber-400/5 px-2 py-1.5 text-[10px] text-amber-200">
-            <span className="uppercase tracking-[0.12em] text-amber-300">Next step</span>
-            <p className="mt-0.5 font-semibold">Scenario zone se bahar close confirm hone dein.</p>
+          <div className="rounded-md border border-amber-400/25 bg-amber-400/5 px-3 py-2 text-[10px] text-amber-100">
+            <span className="uppercase tracking-[0.16em] text-amber-300">Next step</span>
+            <p className="mt-1 font-semibold leading-5">Scenario zone se bahar close confirm hone dein.</p>
           </div>
         </div>
-      </div>
+      </section>
 
       <div className="grid gap-3 border border-slate-800 bg-slate-950 p-3 md:grid-cols-[auto_1fr] md:items-center">
         {positionMetrics.length > 0 ? (
@@ -1032,11 +1037,14 @@ function TradingChart() {
   );
 }
 
-function StateMetric({ label, value }: { label: string; value: string }) {
+function StateMetric({ label, value, hint, tone = "neutral" }: { label: string; value: string; hint: string; tone?: "positive" | "negative" | "neutral" }) {
+  const valueClass = tone === "positive" ? "text-emerald-300" : tone === "negative" ? "text-red-300" : "text-slate-200";
+
   return (
-    <div className="min-w-0 rounded-md border border-slate-800 bg-[#071022] px-2 py-1.5">
+    <div className="min-w-0 rounded-md border border-slate-800 bg-[#071022] px-2.5 py-2">
       <p className="truncate text-[10px] uppercase tracking-[0.12em] text-slate-500">{label}</p>
-      <p className="mt-0.5 truncate font-semibold text-slate-200">{value}</p>
+      <p className={`mt-1 truncate font-semibold ${valueClass}`}>{value}</p>
+      <p className="mt-1 truncate text-[10px] text-slate-600">{hint}</p>
     </div>
   );
 }
