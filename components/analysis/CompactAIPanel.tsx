@@ -37,7 +37,7 @@ export const CompactAIPanel = () => {
   if (!analysis) {
     return (
       <section className="rounded-md border border-slate-800 bg-[#050b1b] p-3 text-xs text-slate-400">
-        <p className="uppercase tracking-[0.18em] text-slate-500">AI Analysis</p>
+        <p className="uppercase tracking-[0.18em] text-slate-500">Technical Analysis</p>
         <p className="mt-3">{status === "loading" ? "Analyzing market..." : "Waiting for market data..."}</p>
       </section>
     );
@@ -56,7 +56,7 @@ export const CompactAIPanel = () => {
   return (
     <section className="text-xs">
       <header className="mb-2 flex items-center justify-between">
-        <p className="uppercase tracking-[0.18em] text-slate-400">AI Analysis</p>
+        <p className="uppercase tracking-[0.18em] text-slate-400">Technical Analysis</p>
         <span className={`rounded bg-slate-900 px-2 py-1 text-[10px] font-semibold uppercase ${signalTone(analysis.trend)}`}>
           {analysis.trend}
         </span>

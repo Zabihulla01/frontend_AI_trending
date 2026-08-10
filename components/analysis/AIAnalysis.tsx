@@ -495,7 +495,7 @@ export default function AIAnalysis({ headless = false }: { headless?: boolean } 
     <section className="rounded-lg border border-slate-800 bg-slate-950/95 p-3">
       <div className="mb-3 flex items-center justify-between gap-2">
         <div>
-          <p className="text-xs uppercase tracking-[0.28em] text-slate-500">AI Analysis</p>
+          <p className="text-xs uppercase tracking-[0.28em] text-slate-500">Technical Analysis</p>
           <h2 className="mt-1 text-sm font-semibold text-white">{symbol}</h2>
         </div>
         <div className={`rounded-lg border px-2 py-1 text-center ${getSignalClasses(composite.signal)}`}>
