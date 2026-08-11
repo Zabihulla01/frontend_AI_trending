@@ -11,6 +11,7 @@ const CACHE_TTL_MS = 5_000;
 const STALE_CACHE_TTL_MS = 10 * 60_000;
 const VALID_SYMBOL = /^[A-Z0-9]{5,20}$/;
 const VALID_INTERVAL = /^(1m|3m|5m|15m|30m|1h|2h|4h|6h|8h|12h|1d|3d|1w|1M)$/;
+const MAX_CACHE_ENTRIES = 300;
 
 interface CacheEntry<T> {
   value: T;
@@ -33,6 +34,16 @@ function getCached<T>(key: string, allowStale = false): T | null {
 
 function setCached<T>(key: string, value: T, ttlMs = CACHE_TTL_MS) {
   const now = Date.now();
+
+  for (const [cachedKey, entry] of responseCache) {
+    if (entry.staleUntil <= now) responseCache.delete(cachedKey);
+  }
+
+  if (!responseCache.has(key) && responseCache.size >= MAX_CACHE_ENTRIES) {
+    const oldestKey = responseCache.keys().next().value as string | undefined;
+    if (oldestKey) responseCache.delete(oldestKey);
+  }
+
   responseCache.set(key, {
     value,
     expiresAt: now + ttlMs,
@@ -62,6 +73,42 @@ async function fetchBinanceJson(path: string): Promise<unknown> {
   }
 
   throw new Error(`Unable to reach Binance API. ${errors.join(" | ")}`);
+}
+
+export function isValidBinanceSymbol(symbol: string) {
+  return VALID_SYMBOL.test(symbol.trim().toUpperCase());
+}
+
+export function isValidBinanceInterval(interval: string) {
+  return VALID_INTERVAL.test(interval.trim());
+}
+
+export function isValidBinanceKline(value: unknown): value is BinanceKlineResponse {
+  if (!Array.isArray(value) || value.length < 12) return false;
+
+  const openTime = Number(value[0]);
+  const open = Number(value[1]);
+  const high = Number(value[2]);
+  const low = Number(value[3]);
+  const close = Number(value[4]);
+  const volume = Number(value[5]);
+  const closeTime = Number(value[6]);
+
+  return (
+    Number.isFinite(openTime) &&
+    Number.isFinite(closeTime) &&
+    Number.isFinite(open) &&
+    Number.isFinite(high) &&
+    Number.isFinite(low) &&
+    Number.isFinite(close) &&
+    Number.isFinite(volume) &&
+    high >= low &&
+    high >= open &&
+    high >= close &&
+    low <= open &&
+    low <= close &&
+    volume >= 0
+  );
 }
 
 export type BinanceKlineResponse = [
@@ -115,11 +162,11 @@ export async function fetchBinanceKlines(
   const normalizedInterval = interval.trim();
   const safeLimit = Math.min(Math.max(Math.trunc(limit), 1), 1000);
 
-  if (!VALID_SYMBOL.test(normalizedSymbol)) {
+  if (!isValidBinanceSymbol(normalizedSymbol)) {
     throw new Error("Invalid trading symbol");
   }
 
-  if (!VALID_INTERVAL.test(normalizedInterval)) {
+  if (!isValidBinanceInterval(normalizedInterval)) {
     throw new Error("Invalid kline interval");
   }
 
@@ -157,7 +204,7 @@ export async function fetchBinanceKlines(
     }
   }
 
-  if (!Array.isArray(data)) {
+  if (!Array.isArray(data) || !data.every(isValidBinanceKline)) {
     throw new Error("Unexpected Binance response");
   }
 

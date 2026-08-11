@@ -74,10 +74,33 @@ function createManagedSocket<T>(options: ManagedSocketOptions<T>): () => void {
     if (staleTimer !== null)     { clearTimeout(staleTimer);     staleTimer = null;     }
   }
 
+  function scheduleReconnect() {
+    if (disposed || reconnectTimer !== null) return;
+
+    emit("RECONNECTING");
+    reconnectTimer = setTimeout(() => {
+      reconnectTimer = null;
+      attempt += 1;
+      connect();
+    }, getBackoffMs(attempt));
+  }
+
   function armStaleTimer() {
     if (staleTimer !== null) clearTimeout(staleTimer);
     staleTimer = setTimeout(() => {
-      if (!disposed) emit("STALE");
+      if (disposed) return;
+
+      emit("STALE");
+
+      try {
+        if (socket && (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING)) {
+          socket.close(4000, "stale stream");
+        } else {
+          scheduleReconnect();
+        }
+      } catch {
+        scheduleReconnect();
+      }
     }, staleThresholdMs);
   }
 
@@ -118,14 +141,13 @@ function createManagedSocket<T>(options: ManagedSocketOptions<T>): () => void {
 
     socket.onclose = (ev: CloseEvent) => {
       if (disposed) return;
-      clearTimers();
+      if (staleTimer !== null) {
+        clearTimeout(staleTimer);
+        staleTimer = null;
+      }
       // 1000 / 1001 = intentional close, don't reconnect
       if (ev.code === 1000 || ev.code === 1001) return;
-      emit("RECONNECTING");
-      reconnectTimer = setTimeout(() => {
-        attempt += 1;
-        connect();
-      }, getBackoffMs(attempt));
+      scheduleReconnect();
     };
   }
 
@@ -165,6 +187,37 @@ interface BinanceTickerFrame {
   c: string; o: string; h: string; l: string; v: string; q: string;
 }
 
+interface KlineSubscriber {
+  onCandle: (payload: BinanceLiveCandle) => void;
+  onStatusChange?: (status: ConnectionStatus) => void;
+  onError?: () => void;
+}
+
+interface SharedKlineSocket {
+  subscribers: Set<KlineSubscriber>;
+  status: ConnectionStatus | null;
+  closeTransport: () => void;
+}
+
+const sharedKlineSockets = new Map<string, SharedKlineSocket>();
+
+function toLiveCandle(msg: BinanceKlineFrame): BinanceLiveCandle {
+  const receivedAt = Date.now();
+  const k = msg.k;
+  const candle: BinanceKlineResponse = [
+    k.t, k.o, k.h, k.l, k.c, k.v, k.T, k.q, k.n, k.V, k.Q, "0",
+  ];
+  const eventTime = Number.isFinite(msg.E) ? msg.E ?? null : null;
+
+  return {
+    candle,
+    isClosed: k.x,
+    eventTime,
+    receivedAt,
+    socketLatencyMs: eventTime !== null ? Math.max(0, receivedAt - eventTime) : null,
+  };
+}
+
 // ---------------------------------------------------------------------------
 // Public: kline socket
 // ---------------------------------------------------------------------------
@@ -184,31 +237,57 @@ export function createBinanceKlineSocket(options: BinanceKlineSocketOptions): ()
   const { symbol, interval, onCandle, onStatusChange, onError, staleThresholdMs } = options;
   const streamName = `${symbol.trim().toLowerCase()}@kline_${interval.trim()}`;
   const url = `wss://stream.binance.com:9443/ws/${streamName}`;
+  const subscriber: KlineSubscriber = { onCandle, onStatusChange, onError };
+  let shared = sharedKlineSockets.get(url);
 
-  return createManagedSocket<BinanceKlineFrame>({
-    url,
-    staleThresholdMs,
-    parseMessage: (raw) => {
-      const msg = JSON.parse(raw) as BinanceKlineFrame;
-      return msg.e === "kline" && msg.k ? msg : null;
-    },
-    onMessage: (msg) => {
-      const receivedAt = Date.now();
-      const k = msg.k;
-      const candle: BinanceKlineResponse = [
-        k.t, k.o, k.h, k.l, k.c, k.v, k.T, k.q, k.n, k.V, k.Q, "0",
-      ];
-      const eventTime = Number.isFinite(msg.E) ? msg.E ?? null : null;
-      const socketLatencyMs = eventTime !== null ? Math.max(0, receivedAt - eventTime) : null;
-      onCandle({ candle, isClosed: k.x, eventTime, receivedAt, socketLatencyMs });
-    },
-    onStatusChange: (status) => {
-      onStatusChange?.(status);
-      if ((status === "RECONNECTING" || status === "STALE") && onError) {
-        onError();
-      }
-    },
-  });
+  if (!shared) {
+    const nextShared: SharedKlineSocket = {
+      subscribers: new Set<KlineSubscriber>(),
+      status: null,
+      closeTransport: () => undefined,
+    };
+
+    nextShared.closeTransport = createManagedSocket<BinanceKlineFrame>({
+      url,
+      staleThresholdMs,
+      parseMessage: (raw) => {
+        const msg = JSON.parse(raw) as BinanceKlineFrame;
+        return msg.e === "kline" && msg.k ? msg : null;
+      },
+      onMessage: (msg) => {
+        const payload = toLiveCandle(msg);
+        Array.from(nextShared.subscribers).forEach((item) => item.onCandle(payload));
+      },
+      onStatusChange: (status) => {
+        nextShared.status = status;
+        Array.from(nextShared.subscribers).forEach((item) => {
+          item.onStatusChange?.(status);
+          if ((status === "RECONNECTING" || status === "STALE") && item.onError) {
+            item.onError();
+          }
+        });
+      },
+    });
+
+    sharedKlineSockets.set(url, nextShared);
+    shared = nextShared;
+  }
+
+  shared.subscribers.add(subscriber);
+  if (shared.status !== null) {
+    onStatusChange?.(shared.status);
+  }
+
+  return () => {
+    const current = sharedKlineSockets.get(url);
+    if (!current) return;
+
+    current.subscribers.delete(subscriber);
+    if (current.subscribers.size === 0) {
+      current.closeTransport();
+      sharedKlineSockets.delete(url);
+    }
+  };
 }
 
 // ---------------------------------------------------------------------------

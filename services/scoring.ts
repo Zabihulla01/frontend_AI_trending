@@ -119,7 +119,9 @@ function calculateScores(snapshot: IndicatorSnapshot, lastClose: number, signalS
     Math.round(
       48 +
         (snapshot.volumeSpike > 0.8 && snapshot.volumeSpike < 1.8 ? 14 : -6) +
-        (snapshot.vwap !== null && lastClose >= snapshot.vwap ? 10 : -4) +
+        (snapshot.vwap !== null
+          ? Math.max(0, 10 - Math.min(Math.abs((lastClose - snapshot.vwap) / lastClose) * 100 * 2, 10))
+          : 0) +
         (snapshot.atr !== null ? Math.max(0, 18 - (snapshot.atr / lastClose) * 100 * 4) : 0) +
         (snapshot.adx !== null ? Math.min(snapshot.adx * 0.25, 10) : 0)
     ),

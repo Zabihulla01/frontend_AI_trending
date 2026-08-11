@@ -1,6 +1,7 @@
 "use client";
 
 import { useAnalysisStore } from "@/store/useAnalysisStore";
+import { useMarketStore } from "@/store/useMarketStore";
 import { useRiskStore } from "@/store/useRiskStore";
 
 function signalTone(signal: string) {
@@ -25,6 +26,7 @@ function displayActionText(action: string, suggestedAction: string) {
 
 export const CompactAIPanel = () => {
   const results = useAnalysisStore((state) => state.results);
+  const interval = useMarketStore((state) => state.interval);
   const status = useAnalysisStore((state) => state.status);
   const targetLocked = useRiskStore((state) => state.targetLocked);
   const targetLockReason = useRiskStore((state) => state.targetLockReason);
@@ -32,7 +34,7 @@ export const CompactAIPanel = () => {
   const entryPrice = useRiskStore((state) => state.entryPrice);
   const stopLoss = useRiskStore((state) => state.stopLoss);
   const takeProfit = useRiskStore((state) => state.takeProfit);
-  const analysis = Object.values(results).find((result) => result !== undefined);
+  const analysis = results[interval];
 
   if (!analysis) {
     return (

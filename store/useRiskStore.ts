@@ -206,16 +206,20 @@ function createTargetContext(plan: TradeSetupPlanInput, fallback: RiskState): Ta
 }
 
 function deriveSetupAction(plan: TradeSetupPlanInput, fallbackAction: RiskAction): RiskAction {
+  if (plan.action === "Wait") {
+    return "Wait";
+  }
+
+  if (plan.action === "Long" || plan.action === "Short") {
+    return plan.action;
+  }
+
   if (plan.trend === "Bullish") {
     return "Long";
   }
 
   if (plan.trend === "Bearish") {
     return "Short";
-  }
-
-  if (plan.action === "Long" || plan.action === "Short") {
-    return plan.action;
   }
 
   const signalText = `${plan.signal ?? ""} ${plan.scoringSignal ?? ""}`.toLowerCase();

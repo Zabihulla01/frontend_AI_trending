@@ -10,6 +10,23 @@ export interface OhlcvCandle extends IndicatorCandle {
   volume: number;
 }
 
+export function isValidOhlcvCandle(candle: OhlcvCandle) {
+  return (
+    Number.isFinite(candle.time) &&
+    Number.isFinite(candle.open) &&
+    Number.isFinite(candle.high) &&
+    Number.isFinite(candle.low) &&
+    Number.isFinite(candle.close) &&
+    Number.isFinite(candle.volume) &&
+    candle.high >= candle.low &&
+    candle.high >= candle.open &&
+    candle.high >= candle.close &&
+    candle.low <= candle.open &&
+    candle.low <= candle.close &&
+    candle.volume >= 0
+  );
+}
+
 export interface IndicatorPoint {
   time: number;
   value: number;
@@ -135,6 +152,10 @@ export function calculateRsi(candles: IndicatorCandle[], period = 14): Indicator
 }
 
 function calculateRsiValue(averageGain: number, averageLoss: number) {
+  if (averageGain === 0 && averageLoss === 0) {
+    return 50;
+  }
+
   if (averageLoss === 0) {
     return 100;
   }

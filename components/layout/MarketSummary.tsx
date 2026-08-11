@@ -1,6 +1,7 @@
 "use client";
 
 import { useAnalysisStore } from "@/store/useAnalysisStore";
+import { useMarketStore } from "@/store/useMarketStore";
 
 function getTone(value: string) {
   if (value === "Bull" || value === "Bullish" || value.includes("Buy") || value === "Long") {
@@ -16,7 +17,8 @@ function getTone(value: string) {
 
 export function MarketSummary() {
   const results = useAnalysisStore((state) => state.results);
-  const analysis = Object.values(results).find((result) => result !== undefined);
+  const interval = useMarketStore((state) => state.interval);
+  const analysis = results[interval];
 
   return (
     <section className="grid gap-3 rounded-lg border border-slate-800 bg-slate-950/90 p-3">
@@ -33,7 +35,8 @@ export function MarketSummary() {
 
 export function SignalSummary() {
   const results = useAnalysisStore((state) => state.results);
-  const analysis = Object.values(results).find((result) => result !== undefined);
+  const interval = useMarketStore((state) => state.interval);
+  const analysis = results[interval];
 
   return (
     <section className="grid gap-3 rounded-lg border border-slate-800 bg-slate-950/90 p-3">

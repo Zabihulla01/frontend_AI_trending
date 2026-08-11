@@ -1,11 +1,23 @@
 import { NextRequest, NextResponse } from "next/server";
 import { searchBinanceSymbols } from "@/services/binance";
+import { consumeRateLimit, parseBoundedInteger } from "@/services/requestGuard";
 
 export async function GET(request: NextRequest) {
   const searchParams = request.nextUrl.searchParams;
   const query = searchParams.get("q") ?? "";
-  const limitParam = Number(searchParams.get("limit") ?? "10");
-  const limit = Number.isNaN(limitParam) ? 10 : Math.min(Math.max(limitParam, 1), 20);
+  const limit = parseBoundedInteger(searchParams.get("limit"), 10, 1, 20);
+  const rateLimit = consumeRateLimit(request, "symbols", 30);
+
+  if (!rateLimit.allowed) {
+    return NextResponse.json(
+      { error: "Too many symbol-search requests. Please retry shortly." },
+      { status: 429, headers: { "Retry-After": String(rateLimit.retryAfterSeconds), "Cache-Control": "no-store" } }
+    );
+  }
+
+  if (limit === null) {
+    return NextResponse.json({ error: "Invalid search parameters." }, { status: 400 });
+  }
 
   try {
     const data = await searchBinanceSymbols(query, limit);
@@ -15,8 +27,7 @@ export async function GET(request: NextRequest) {
       headers: { "Content-Type": "application/json" },
     });
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Failed to search Binance symbols";
-
-    return NextResponse.json({ error: message }, { status: 502 });
+    console.error("[api/symbols] Binance request failed", error);
+    return NextResponse.json({ error: "Symbol search is temporarily unavailable." }, { status: 502 });
   }
 }

@@ -14,6 +14,7 @@ import {
   analyzeTimeframe,
   calculateCompositeSignal,
 } from "@/services/analysis";
+import { isValidOhlcvCandle } from "@/services/indicators";
 import { createBinanceKlineSocket } from "@/services/websocket";
 import { useAnalysisStore } from "@/store/useAnalysisStore";
 import { useMarketStore } from "@/store/useMarketStore";
@@ -38,7 +39,9 @@ function parseKline(kline: BinanceKlineResponse): AnalysisCandle | null {
     Number.isFinite(candle.open) &&
     Number.isFinite(candle.high) &&
     Number.isFinite(candle.low) &&
-    Number.isFinite(candle.close);
+    Number.isFinite(candle.close) &&
+    Number.isFinite(candle.volume) &&
+    isValidOhlcvCandle(candle);
 
   return isValid ? candle : null;
 }
@@ -171,7 +174,7 @@ function getSuggestedActionClasses(signal: string) {
 
 export default function AIAnalysis({ headless = false }: { headless?: boolean } = {}) {
   const symbol = useMarketStore((state) => state.symbol);
-  const interval = useMarketStore((state) => state.interval) as AnalysisTimeframe;
+  const interval = useMarketStore((state) => state.interval);
   const status = useAnalysisStore((state) => state.status);
   const analysisSymbol = useAnalysisStore((state) => state.symbol);
   const analysisInterval = useAnalysisStore((state) => state.interval);

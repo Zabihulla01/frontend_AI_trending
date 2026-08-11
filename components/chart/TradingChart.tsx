@@ -21,6 +21,7 @@ import {
   calculateVwap,
   getLatestMacd,
   getLatestValue,
+  isValidOhlcvCandle,
 } from "@/services/indicators";
 import { createBinanceKlineSocket } from "@/services/websocket";
 import { useIndicatorStore } from "@/store/useIndicatorStore";
@@ -66,7 +67,8 @@ function parseKline(kline: BinanceKlineResponse): CandlePoint | null {
     Number.isFinite(candle.high) &&
     Number.isFinite(candle.low) &&
     Number.isFinite(candle.close) &&
-    Number.isFinite(candle.volume);
+    Number.isFinite(candle.volume) &&
+    isValidOhlcvCandle(candle);
 
   return isValid ? candle : null;
 }

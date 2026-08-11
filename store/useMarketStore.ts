@@ -3,10 +3,12 @@ import { createJSONStorage, persist } from "zustand/middleware";
 
 const DEFAULT_WATCHLIST = ["BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "XRPUSDT"];
 const VALID_SYMBOL = /^[A-Z0-9]{3,20}$/;
+export const MARKET_INTERVALS = ["1m", "5m", "15m", "1h", "4h", "1d"] as const;
+export type MarketInterval = (typeof MARKET_INTERVALS)[number];
 
 interface MarketState {
   symbol: string;
-  interval: string;
+  interval: MarketInterval;
   watchlist: string[];
   validSymbols: string[];
   setSymbol: (symbol: string) => void;
@@ -18,6 +20,10 @@ interface MarketState {
 
 function normalizeSymbol(symbol: string) {
   return symbol.trim().toUpperCase().replace(/\s+/g, "");
+}
+
+export function isMarketInterval(interval: string): interval is MarketInterval {
+  return (MARKET_INTERVALS as readonly string[]).includes(interval);
 }
 
 export const useMarketStore = create<MarketState>()(
@@ -41,7 +47,11 @@ export const useMarketStore = create<MarketState>()(
       return { symbol: normalizedSymbol };
     });
   },
-  setInterval: (interval: string) => set({ interval }),
+  setInterval: (interval: string) => {
+    if (isMarketInterval(interval)) {
+      set({ interval });
+    }
+  },
   addSymbol: (symbol: string) => {
     const normalizedSymbol = normalizeSymbol(symbol);
 
@@ -99,6 +109,33 @@ export const useMarketStore = create<MarketState>()(
         interval: state.interval,
         watchlist: state.watchlist,
       }),
+      merge: (persistedState, currentState) => {
+        const persisted = persistedState as Partial<Pick<MarketState, "symbol" | "interval" | "watchlist">>;
+        const watchlist = Array.isArray(persisted.watchlist)
+          ? Array.from(
+              new Set(
+                persisted.watchlist
+                  .filter((item): item is string => typeof item === "string")
+                  .map(normalizeSymbol)
+                  .filter((item) => VALID_SYMBOL.test(item))
+              )
+            )
+          : currentState.watchlist;
+
+        return {
+          ...currentState,
+          ...persisted,
+          symbol:
+            typeof persisted.symbol === "string" && VALID_SYMBOL.test(normalizeSymbol(persisted.symbol))
+              ? normalizeSymbol(persisted.symbol)
+              : currentState.symbol,
+          interval:
+            typeof persisted.interval === "string" && isMarketInterval(persisted.interval)
+              ? persisted.interval
+              : currentState.interval,
+          watchlist: watchlist.length > 0 ? watchlist : currentState.watchlist,
+        };
+      },
     }
   )
 );

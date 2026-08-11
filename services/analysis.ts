@@ -330,7 +330,7 @@ function calculateRuleConfidence(input: {
 
   if (ema20 !== null && ema50 !== null) {
     const emaSpread = Math.abs((ema20 - ema50) / ema50) * 100;
-    confidence += ema20 > ema50 ? 18 : 14;
+    confidence += 18;
     confidence += Math.min(emaSpread * 12, 12);
   }
 

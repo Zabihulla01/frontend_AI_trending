@@ -2,6 +2,7 @@
 
 import { useAnalysisStore } from "@/store/useAnalysisStore";
 import { useIndicatorStore } from "@/store/useIndicatorStore";
+import { useMarketStore } from "@/store/useMarketStore";
 
 function formatPrice(value: number | null | undefined) {
   if (value === null || value === undefined || !Number.isFinite(value)) {
@@ -14,7 +15,8 @@ function formatPrice(value: number | null | undefined) {
 export default function MarketScenarios() {
   const snapshot = useIndicatorStore((state) => state.snapshot);
   const results = useAnalysisStore((state) => state.results);
-  const analysis = results["1h"] ?? Object.values(results).find((result) => result !== undefined);
+  const interval = useMarketStore((state) => state.interval);
+  const analysis = results[interval];
 
   const currentPrice = analysis?.lastClose ?? null;
   const support = analysis?.support ?? snapshot?.support ?? null;

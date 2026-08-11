@@ -61,7 +61,9 @@ function isValidTrade(trade: OpenTradeInput) {
 export const useTradeStore = create<TradeState>((set) => ({
   activeTrade: null,
   lastStatus: null,
-  isAuto: true,
+  // Automatic trade simulation is opt-in. The dashboard has no exchange
+  // execution and must not create hidden positions without user action.
+  isAuto: false,
   isPaused: false,
   isLocked: false,
   cooldownUntil: 0,
