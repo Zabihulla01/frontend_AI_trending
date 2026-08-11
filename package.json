@@ -5,6 +5,7 @@
   "scripts": {
     "dev": "next dev -H 0.0.0.0 -p 3000",
     "lint": "eslint .",
+    "test": "node --experimental-strip-types --test tests/indicator-and-request-guard.test.ts",
     "build": "next build",
     "start": "next start -H 0.0.0.0 -p 3000"
   },

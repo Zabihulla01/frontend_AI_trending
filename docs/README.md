@@ -4,6 +4,8 @@ This directory contains project audits, architecture notes, dependency reviews, 
 
 ## Start here
 
+- `IMPLEMENTATION_STATUS.md` — current verified status and known limitations
+
 - `QUICK_REFERENCE.md` — overview and navigation
 - `ARCHITECTURE_DIAGRAM.md` — application structure and data flow
 - `RESOURCE_AUDIT.md` — asset and resource review
