@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useMarketStore } from "@/store/useMarketStore";
 import { usePositionManagerStore } from "@/store/usePositionManagerStore";
+import { isActivePosition } from "@/services/positionDisplay";
 import styles from "./AIPositionManager.module.css";
 
 type PositionStatus = "ACTIVE" | "COMPLETED" | "STOPPED_OUT" | "CLOSED" | string;
@@ -166,9 +167,17 @@ function getHoldingMinutes(position: PositionView, now: number) {
   const storedHoldingTime =
     isFiniteNumber(recommendationHoldingTime) && recommendationHoldingTime >= 0 ? recommendationHoldingTime : null;
 
-  if (!isFiniteNumber(position.lockedAt) || position.lockedAt <= 0 || now <= 0) return storedHoldingTime;
+  const closedAt =
+    position.status === "ACTIVE"
+      ? null
+      : position.timeline?.filter((event) => event.type === "TRADE_CLOSED").at(-1)?.timestamp ?? null;
+  const endingTime = closedAt ?? now;
 
-  const elapsedHoldingTime = Math.max(0, (now - position.lockedAt) / 60000);
+  if (!isFiniteNumber(position.lockedAt) || position.lockedAt <= 0 || !isFiniteNumber(endingTime) || endingTime <= 0) {
+    return storedHoldingTime;
+  }
+
+  const elapsedHoldingTime = Math.max(0, (endingTime - position.lockedAt) / 60000);
   return storedHoldingTime === null ? elapsedHoldingTime : Math.max(storedHoldingTime, elapsedHoldingTime);
 }
 
@@ -348,7 +357,7 @@ export default function AIPositionManager() {
   const liveRisk = Math.abs(position.entry - position.originalStopLoss);
   const liveMove = (position.currentPrice - position.entry) * (position.direction === "SHORT" ? -1 : 1);
   const liveRR = liveRisk > 0 ? liveMove / liveRisk : null;
-  const isActive = position.status === "ACTIVE";
+  const isActive = isActivePosition(position.status);
   const isConfirmingClose = closeConfirmationKey === position.key;
   const canRecordStopSuggestion = isActive && isStopMoveRecommendation(recommendation?.recommendation);
   const statusClass = styles[status.className] ?? styles.closed;
@@ -374,7 +383,7 @@ export default function AIPositionManager() {
         <span className={`${styles.statusBadge} ${statusClass}`}>{status.label}</span>
       </div>
 
-      {notifications.length > 0 ? (
+      {isActive && notifications.length > 0 ? (
         <div className={styles.notifications} aria-live="polite" aria-label="Position recommendation updates">
           {notifications.map((notification) => (
             <div key={notification.id} className={styles.notification} role="status">
@@ -404,32 +413,36 @@ export default function AIPositionManager() {
 
       <div className={styles.metrics}>
         <Metric label="Entry" value={formatPrice(position.entry)} />
-        <Metric label="Current price" value={formatPrice(position.currentPrice)} />
+        <Metric label={isActive ? "Current price" : "Price at close"} value={formatPrice(position.currentPrice)} />
         <Metric label="PnL %" value={formatPercent(pnl.percent)} tone={metricTone(pnl.percent)} />
         <Metric label="PnL amount" value={formatAmount(pnl.amount)} tone={metricTone(pnl.amount)} />
         <Metric label="Holding time" value={formatDuration(holdingMinutes)} />
         <Metric
-          label="Current R Multiple"
+          label={isActive ? "Current R Multiple" : "Final R Multiple"}
           value={isFiniteNumber(liveRR) ? liveRR.toFixed(2) : "--"}
-          description="Realized price movement measured against the original risk."
+          description="Price movement measured against the original risk."
         />
         <Metric label="Initial risk" value={formatPercent(protection.initialRiskPercent)} tone="negative" description="Distance from entry to the original stop-loss." />
-        <Metric label="Active risk" value={formatPercent(protection.activeRiskPercent)} tone={protection.activeRiskPercent === 0 ? "positive" : "negative"} description="Remaining stop distance from entry after protection updates." />
-        <Metric label="Locked profit" value={formatPercent(protection.lockedProfitPercent)} tone={protection.lockedProfitPercent && protection.lockedProfitPercent > 0 ? "positive" : "neutral"} description="Profit secured if the active stop is reached, before fees or slippage." />
-         <Metric label="Risk protected" value={`${protectionScore}%`} tone={protectionScore >= 70 ? "positive" : "neutral"} description="Percentage of the original stop-loss risk removed by the active stop. This is separate from guidance confidence." />
+        {isActive ? (
+          <>
+            <Metric label="Active risk" value={formatPercent(protection.activeRiskPercent)} tone={protection.activeRiskPercent === 0 ? "positive" : "negative"} description="Remaining stop distance from entry after protection updates." />
+            <Metric label="Locked profit" value={formatPercent(protection.lockedProfitPercent)} tone={protection.lockedProfitPercent && protection.lockedProfitPercent > 0 ? "positive" : "neutral"} description="Profit secured if the active stop is reached, before fees or slippage." />
+            <Metric label="Risk protected" value={`${protectionScore}%`} tone={protectionScore >= 70 ? "positive" : "neutral"} description="Percentage of the original stop-loss risk removed by the active stop. This is separate from guidance confidence." />
+          </>
+        ) : null}
       </div>
 
       <div className={styles.levels} aria-label="Locked trade levels">
         <Level label="TP2" value={formatPrice(position.tp2)} tone="positive" />
         <Level label="TP1" value={formatPrice(position.tp1)} tone="positive" />
-        <Level label="Active SL" value={formatPrice(position.activeStopLoss)} tone="negative" />
-        <Level label="Target distance" value={formatPercent(protection.targetPercent)} tone="positive" />
-        <Level label="Target progress" value={formatPercent(protection.targetProgress)} tone="positive" />
-        {position.trailingActive ? <span className={styles.trailingFlag}>TRAILING ACTIVE</span> : null}
+        <Level label={isActive ? "Active SL" : "Original SL"} value={formatPrice(isActive ? position.activeStopLoss : position.originalStopLoss)} tone="negative" />
+        {isActive ? <Level label="Target distance" value={formatPercent(protection.targetPercent)} tone="positive" /> : null}
+        {isActive ? <Level label="Target progress" value={formatPercent(protection.targetProgress)} tone="positive" /> : null}
+        {isActive && position.trailingActive ? <span className={styles.trailingFlag}>TRAILING ACTIVE</span> : null}
         {position.tp1HitAt ? <span className={styles.tpFlag}>TP1 HIT</span> : null}
       </div>
 
-      <section className={styles.guidance} aria-labelledby="position-guidance-title">
+      {isActive ? <section className={styles.guidance} aria-labelledby="position-guidance-title">
         <div className={styles.guidanceHeader}>
           <div>
             <p className={styles.sectionLabel}>Protection decision</p>
@@ -468,7 +481,19 @@ export default function AIPositionManager() {
           <p className={styles.sectionLabel}>Why this is suggested</p>
           <p>{reason}</p>
         </div>
-      </section>
+      </section> : (
+        <section className={styles.guidance} aria-labelledby="position-outcome-title">
+          <p className={styles.sectionLabel}>Position outcome</p>
+          <h3 id="position-outcome-title" className={styles.recommendation}>{status.label} — MONITORING ENDED</h3>
+          <p className={styles.scoreLegend}>
+            This is a historical snapshot. Guidance, active stop-loss protection, and target-progress metrics are no longer active.
+          </p>
+          <div className={styles.positionState}>
+            <p className={styles.sectionLabel}>Final status</p>
+            <p>{status.detail}</p>
+          </div>
+        </section>
+      )}
 
       {isActive ? (
         <div className={styles.actions}>

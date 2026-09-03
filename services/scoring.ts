@@ -9,6 +9,7 @@ import { createAtrTradePlan } from "@/store/useRiskStore";
 export type Signal = "Strong Buy" | "Buy" | "Neutral" | "Sell" | "Strong Sell";
 export type RiskLevel = "Low" | "Medium" | "High";
 export type Action = "Long" | "Short" | "Wait";
+export type SetupType = "Crossover" | "Continuation" | "None";
 
 export type ScoringCandle = OhlcvCandle;
 
@@ -23,6 +24,7 @@ export interface CustomScores {
 
 export interface TradePlan {
   action: Action;
+  setupType: SetupType;
   entry: number | null;
   stop: number | null;
   takeProfit: number | null;
@@ -190,7 +192,37 @@ function createTradePlan(
     previousSnapshot.ema26 !== null &&
     previousSnapshot.ema12 >= previousSnapshot.ema26 &&
     snapshot.ema12 < snapshot.ema26;
-  const initialAction: Action = bullishCross ? "Long" : bearishCross ? "Short" : "Wait";
+  const crossoverAction: Action = bullishCross ? "Long" : bearishCross ? "Short" : "Wait";
+  const bullishContinuation =
+    crossoverAction === "Wait" &&
+    snapshot.ema12 !== null &&
+    snapshot.ema26 !== null &&
+    snapshot.ema20 !== null &&
+    snapshot.ema50 !== null &&
+    snapshot.ema12 > snapshot.ema26 &&
+    snapshot.ema20 >= snapshot.ema50 &&
+    lastClose > snapshot.ema20 &&
+    snapshot.macdHistogram !== null &&
+    snapshot.macdHistogram > 0 &&
+    snapshot.momentum > 0 &&
+    snapshot.adx !== null &&
+    snapshot.adx >= 22;
+  const bearishContinuation =
+    crossoverAction === "Wait" &&
+    snapshot.ema12 !== null &&
+    snapshot.ema26 !== null &&
+    snapshot.ema20 !== null &&
+    snapshot.ema50 !== null &&
+    snapshot.ema12 < snapshot.ema26 &&
+    snapshot.ema20 <= snapshot.ema50 &&
+    lastClose < snapshot.ema20 &&
+    snapshot.macdHistogram !== null &&
+    snapshot.macdHistogram < 0 &&
+    snapshot.momentum < 0 &&
+    snapshot.adx !== null &&
+    snapshot.adx >= 22;
+  const initialAction: Action = crossoverAction !== "Wait" ? crossoverAction : bullishContinuation ? "Long" : bearishContinuation ? "Short" : "Wait";
+  const setupType: SetupType = crossoverAction !== "Wait" ? "Crossover" : initialAction !== "Wait" ? "Continuation" : "None";
   const directionSign = initialAction === "Long" ? 1 : initialAction === "Short" ? -1 : 0;
   const macdConfirm =
     directionSign !== 0 &&
@@ -202,7 +234,9 @@ function createTradePlan(
       : directionSign === -1
       ? snapshot.rsi !== null && snapshot.rsi >= 32 && snapshot.rsi <= 55
       : false;
-  const volumeConfirm = snapshot.volumeSpike >= 1.15;
+  // Continuation trades can use normal volume. Requiring a volume spike on
+  // every candle made established trends impossible to enter.
+  const volumeConfirm = snapshot.volumeSpike >= (setupType === "Continuation" ? 0.9 : 1.15);
   const trendConfirm =
     directionSign !== 0 &&
     snapshot.adx !== null &&
@@ -215,21 +249,31 @@ function createTradePlan(
       ? snapshot.ema20 !== null && snapshot.ema50 !== null && lastClose < snapshot.ema20 && snapshot.ema20 <= snapshot.ema50
       : false;
   const setupChecks = {
-    emaCrossover: bullishCross || bearishCross,
+    // Continuation entries require an already-aligned EMA structure rather
+    // than a new crossover, but remain subject to every other confirmation.
+    emaCrossover: bullishCross || bearishCross || setupType === "Continuation",
     macdConfirm,
     rsiConfirm,
     volumeConfirm,
     trendConfirm,
     marketStructureConfirm,
   };
-  const allConfirmed = Object.values(setupChecks).every(Boolean);
-  const action = allConfirmed && scores.confidence > 80 ? initialAction : "Wait";
+  // Direction, momentum, and market structure protect the setup. RSI and
+  // volume remain visible confirmations, but should reduce sizing rather
+  // than suppress a valid target completely.
+  const hardChecksPassed =
+    setupChecks.emaCrossover && setupChecks.macdConfirm && setupChecks.trendConfirm && setupChecks.marketStructureConfirm;
+  const minimumConfidence = 60;
+  const action = hardChecksPassed && scores.confidence >= minimumConfidence ? initialAction : "Wait";
 
   if (action === "Wait") {
-    const reason = scores.confidence <= 80 ? "confidence below 80%" : "setup checks incomplete";
+    const reason = scores.confidence < minimumConfidence ? `confidence below ${minimumConfidence}%` : "required structure checks incomplete";
 
     return {
       action,
+      // Preserve the candidate type so the analysis layer can show the real
+      // threshold and diagnostic state instead of treating it as no setup.
+      setupType,
       entry: lastClose,
       stop: null,
       takeProfit: null,
@@ -251,6 +295,7 @@ function createTradePlan(
   if (action === "Long") {
     return {
       action,
+      setupType,
       entry: plan.entry,
       stop: plan.stop,
       takeProfit: plan.takeProfit,
@@ -264,6 +309,7 @@ function createTradePlan(
   if (action === "Short") {
     return {
       action,
+      setupType,
       entry: plan.entry,
       stop: plan.stop,
       takeProfit: plan.takeProfit,
@@ -276,6 +322,7 @@ function createTradePlan(
 
   return {
     action,
+    setupType: "None",
     entry: lastClose,
     stop: null,
     takeProfit: null,

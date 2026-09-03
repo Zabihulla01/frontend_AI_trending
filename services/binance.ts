@@ -2,13 +2,16 @@ export const BINANCE_BASE_URL = "https://api.binance.com/api/v3";
 const BINANCE_BASE_URLS = [
   process.env.BINANCE_API_BASE_URL,
   BINANCE_BASE_URL,
+  "https://api-gcp.binance.com/api/v3",
   "https://api1.binance.com/api/v3",
   "https://api2.binance.com/api/v3",
+  "https://api3.binance.com/api/v3",
+  "https://api4.binance.com/api/v3",
   "https://data-api.binance.vision/api/v3",
 ].filter((baseUrl, index, urls): baseUrl is string => Boolean(baseUrl) && urls.indexOf(baseUrl) === index);
-const REQUEST_TIMEOUT_MS = 7_000;
-const CACHE_TTL_MS = 5_000;
-const STALE_CACHE_TTL_MS = 10 * 60_000;
+const REQUEST_TIMEOUT_MS = parseInt(process.env.BINANCE_REQUEST_TIMEOUT_MS ?? "15000");
+const CACHE_TTL_MS = 10_000;
+const STALE_CACHE_TTL_MS = 30 * 60_000;
 const VALID_SYMBOL = /^[A-Z0-9]{5,20}$/;
 const VALID_INTERVAL = /^(1m|3m|5m|15m|30m|1h|2h|4h|6h|8h|12h|1d|3d|1w|1M)$/;
 const MAX_CACHE_ENTRIES = 300;
@@ -52,14 +55,13 @@ function setCached<T>(key: string, value: T, ttlMs = CACHE_TTL_MS) {
 }
 
 async function fetchBinanceJson(path: string): Promise<unknown> {
-  const errors: string[] = [];
-
-  for (const baseUrl of BINANCE_BASE_URLS) {
+  const controllers = BINANCE_BASE_URLS.map(() => new AbortController());
+  const requests = BINANCE_BASE_URLS.map(async (baseUrl, index) => {
     try {
       const response = await fetch(`${baseUrl}${path}`, {
         headers: { Accept: "application/json" },
         cache: "no-store",
-        signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+        signal: AbortSignal.any([controllers[index].signal, AbortSignal.timeout(REQUEST_TIMEOUT_MS)]),
       });
 
       if (!response.ok) {
@@ -68,11 +70,23 @@ async function fetchBinanceJson(path: string): Promise<unknown> {
 
       return response.json();
     } catch (error) {
-      errors.push(`${baseUrl}: ${error instanceof Error ? error.message : String(error)}`);
+      throw new Error(`${baseUrl}: ${error instanceof Error ? error.message : String(error)}`);
     }
-  }
+  });
 
-  throw new Error(`Unable to reach Binance API. ${errors.join(" | ")}`);
+  try {
+    // Mirror requests are raced so a timeout on one regional endpoint does not
+    // delay a successful response from another endpoint.
+    return await Promise.any(requests);
+  } catch (error) {
+    const errors = error instanceof AggregateError
+      ? error.errors.map((reason) => reason instanceof Error ? reason.message : String(reason))
+      : [error instanceof Error ? error.message : String(error)];
+
+    throw new Error(`Unable to reach Binance API. ${errors.join(" | ")}`);
+  } finally {
+    controllers.forEach((controller) => controller.abort());
+  }
 }
 
 export function isValidBinanceSymbol(symbol: string) {

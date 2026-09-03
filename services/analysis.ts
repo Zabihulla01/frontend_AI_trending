@@ -364,12 +364,11 @@ function createWaitAnalysis(input: {
   reason?: string;
 }) {
   const { scoring, confidence, reason = "Low conviction market" } = input;
-  const waitConfidence = Math.min(confidence, 69);
 
   return {
     signal: "Wait" as AnalysisSignal,
     scoringSignal: "Neutral" as ScoringSignal,
-    confidence: waitConfidence,
+    confidence,
     entry: null,
     stop: null,
     takeProfit: null,
@@ -497,6 +496,7 @@ export function analyzeTimeframe(
     takeProfit: null,
     riskReward: null,
     action: "Wait" as const,
+    setupType: "None" as const,
     suggestedAction: "WAIT: no clear edge",
     setupChecks: {
       emaCrossover: false,
@@ -525,9 +525,12 @@ export function analyzeTimeframe(
   const hasCompleteTradePlan = scoring.entry !== null && scoring.stop !== null && scoring.takeProfit !== null && scoring.riskReward !== null;
   const requestedAction = scoring.action;
   const directionAllowed = requestedAction === "Long" ? emaAllowsLong : requestedAction === "Short" ? emaAllowsShort : false;
+  // The scoring layer has already verified EMA/MACD/trend structure. Keep a
+  // conservative confidence floor here, but do not reject a valid target a
+  // second time just because the market is classified as sideways.
+  const minimumTradeConfidence = 60;
   const canTrade =
-    blendedConfidence > 80 &&
-    marketCondition !== "Sideways" &&
+    blendedConfidence >= minimumTradeConfidence &&
     requestedAction !== "Wait" &&
     directionAllowed &&
     hasCompleteTradePlan;
@@ -553,15 +556,17 @@ export function analyzeTimeframe(
         scoring,
         confidence: blendedConfidence,
         reason:
-          blendedConfidence < 70 || marketCondition === "Sideways" || blendedConfidence <= 80
-            ? "Low conviction market"
+          marketCondition === "Sideways"
+            ? "Sideways market"
+            : scoring.setupType === "Continuation"
+            ? "Trend continuation checks incomplete"
             : "Low conviction market",
       });
 
   const finalProbability = normalizedTrade.signal === "Wait" ? Math.min(probability, 60) : probability;
-  const finalConfidence = normalizedTrade.signal === "Wait" ? Math.min(normalizedTrade.confidence, 69) : normalizedTrade.confidence;
+  const finalConfidence = normalizedTrade.confidence;
   const waitReasons = [
-    `Low conviction: confidence ${finalConfidence}%, trade requires more than 80%.`,
+    `Low conviction: confidence ${finalConfidence}%, trade requires more than ${minimumTradeConfidence}%.`,
     marketCondition === "Sideways"
       ? "Market is sideways; wait for a clean structure break."
       : `Market condition is ${marketCondition}; confirmation is incomplete.`,
@@ -654,7 +659,7 @@ export function calculateCompositeSignal(results: TimeframeAnalysis[]) {
       ? "Sell"
       : "Neutral";
 
-  const finalConfidence = signal === "Wait" ? Math.min(confidence, 69) : confidence;
+  const finalConfidence = confidence;
   const finalProbability = signal === "Wait" ? Math.min(probability, 60) : probability;
 
   return { signal, probability: finalProbability, confidence: finalConfidence, strength };

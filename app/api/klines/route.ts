@@ -24,10 +24,13 @@ export async function GET(request: NextRequest) {
     const data = await fetchBinanceKlines(symbol, interval, limit);
     return NextResponse.json(data, {
       status: 200,
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", "Cache-Control": "public, max-age=10" },
     });
   } catch (error) {
     console.error("[api/klines] Binance request failed", error);
-    return NextResponse.json({ error: "Market data is temporarily unavailable." }, { status: 502 });
+    return NextResponse.json(
+      { error: "Market data is temporarily unavailable. Please retry shortly." },
+      { status: 502, headers: { "Retry-After": "5" } }
+    );
   }
 }

@@ -654,6 +654,18 @@ function TradingChart() {
     // Additive fan-out: the Position Manager reuses this chart stream and never alters chart, signal, or order logic.
     const positionManager = usePositionManagerStore.getState();
     positionManager.updateMarketPrice({ symbol, timeframe: interval, price: candle.close });
+    positionManager.processLiveCandle({
+      symbol,
+      timeframe: interval,
+      candles: nextCandles.map((item) => ({
+        time: Number(item.time),
+        open: item.open,
+        high: item.high,
+        low: item.low,
+        close: item.close,
+        volume: item.volume,
+      })),
+    });
 
     if (closedCandle) {
       const nextClosedCandles = upsertCandle(closedCandlesRef.current, closedCandle);

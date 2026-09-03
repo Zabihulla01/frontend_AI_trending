@@ -336,9 +336,27 @@ export function detectSupportResistance(candles: OhlcvCandle[], lookback = 50): 
     return { support: null, resistance: null };
   }
 
+  const latestClose = recent.at(-1)?.close ?? null;
+  const pivotRadius = 2;
+  const swingLows: number[] = [];
+  const swingHighs: number[] = [];
+
+  for (let index = pivotRadius; index < recent.length - pivotRadius; index += 1) {
+    const candle = recent[index];
+    const window = recent.slice(index - pivotRadius, index + pivotRadius + 1);
+
+    if (window.every((item) => candle.low <= item.low)) swingLows.push(candle.low);
+    if (window.every((item) => candle.high >= item.high)) swingHighs.push(candle.high);
+  }
+
+  const nearestSupport =
+    latestClose === null ? null : swingLows.filter((level) => level < latestClose).reduce<number | null>((nearest, level) => (nearest === null || level > nearest ? level : nearest), null);
+  const nearestResistance =
+    latestClose === null ? null : swingHighs.filter((level) => level > latestClose).reduce<number | null>((nearest, level) => (nearest === null || level < nearest ? level : nearest), null);
+
   return {
-    support: Math.min(...recent.map((candle) => candle.low)),
-    resistance: Math.max(...recent.map((candle) => candle.high)),
+    support: nearestSupport ?? Math.min(...recent.map((candle) => candle.low)),
+    resistance: nearestResistance ?? Math.max(...recent.map((candle) => candle.high)),
   };
 }
 

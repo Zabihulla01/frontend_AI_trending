@@ -44,6 +44,7 @@ interface PositionManagerState {
   getPositionKey: (symbol: string, timeframe: string) => string;
   lockPosition: (input: PositionLockInput) => ManagedPosition | null;
   updateMarketPrice: (input: { symbol: string; timeframe: string; price: number }) => void;
+  processLiveCandle: (input: { symbol: string; timeframe: string; candles: PositionCandle[] }) => void;
   processCompletedCandle: (input: { symbol: string; timeframe: string; candles: PositionCandle[] }) => void;
   closePosition: (input: { key: string }) => void;
   acknowledgeSuggestedStopMove: (input: { key: string }) => void;
@@ -214,6 +215,50 @@ export const usePositionManagerStore = create<PositionManagerState>()(
             positions: {
               ...state.positions,
               [key]: { ...position, currentPrice: price, lastRecommendation: nextRecommendation },
+            },
+          };
+        });
+      },
+      processLiveCandle: ({ symbol, timeframe, candles }) => {
+        const key = createPositionKey(symbol, timeframe);
+        set((state) => {
+          const position = state.positions[key];
+          if (!position || position.status !== "ACTIVE") return state;
+
+          // High/low crossings are monotonic during a live candle, so a TP or
+          // stop touch can be recorded immediately without waiting for the
+          // timeframe to close. Indicator-based guidance remains completed-
+          // candle-only in processCompletedCandle.
+          const evaluation = evaluatePosition(position, candles);
+          if (!evaluation || (!evaluation.tp1Hit && !evaluation.tp2Hit && !evaluation.stopLossHit)) return state;
+
+          const timestamp = Date.now();
+          const timeline = [...position.timeline];
+          let status: PositionStatus = position.status;
+
+          if (evaluation.stopLossHit) {
+            status = "STOPPED_OUT";
+            timeline.push(createEvent("STOP_LOSS_HIT", "Stop-loss level crossed by live market data. Verify any exchange fill independently.", timestamp, "STOP LOSS HIT"));
+            timeline.push(createEvent("TRADE_CLOSED", "Monitoring stopped after the live stop-loss crossing.", timestamp));
+          } else if (evaluation.tp2Hit) {
+            status = "COMPLETED";
+            timeline.push(createEvent("TP2_HIT", "TP2 crossed by live market data. Consider closing any remaining position manually.", timestamp, "TP2 HIT"));
+            timeline.push(createEvent("TRADE_CLOSED", "Monitoring completed after the live TP2 crossing.", timestamp));
+          } else if (evaluation.tp1Hit) {
+            timeline.push(createEvent("TP1_HIT", "TP1 crossed by live market data. Consider booking partial profit manually.", timestamp, "BOOK PARTIAL PROFIT"));
+          }
+
+          return {
+            positions: {
+              ...state.positions,
+              [key]: {
+                ...position,
+                currentPrice: candles.at(-1)?.close ?? position.currentPrice,
+                status,
+                tp1HitAt: evaluation.tp1Hit ? timestamp : position.tp1HitAt,
+                timeline: timeline.slice(-MAX_TIMELINE_EVENTS),
+                lastRecommendation: evaluation.recommendation,
+              },
             },
           };
         });
