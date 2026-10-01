@@ -9,6 +9,7 @@
  *
  * Run with:  npx ts-node --project tsconfig.json tests/runtime-behavior-sim.ts
  */
+export {};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Constants (exact copies from useRiskStore.ts)

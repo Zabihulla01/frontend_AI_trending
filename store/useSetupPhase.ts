@@ -213,6 +213,5 @@ export function useSetupPhase(symbol: string, interval: string): SetupPhaseResul
     // applyTradePlan regenerates a setup with the same numeric entry/sl,
     // targetLocked toggling false→true is the only signal that the geometry
     // is fresh and approach thresholds should reset.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [entryPrice, stopLoss, atrStr, action, targetLocked, priceEntry, nowMs]);
 }

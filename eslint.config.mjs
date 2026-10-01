@@ -12,6 +12,10 @@ const eslintConfig = defineConfig([
     "out/**",
     "build/**",
     "next-env.d.ts",
+    // These are standalone CommonJS runtime diagnostics, not application
+    // modules or Node test-runner test files.
+    "tests/*.js",
+    "tests/runtime-behavior-sim.ts",
   ]),
 ]);
 
