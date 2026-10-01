@@ -80,7 +80,7 @@ interface RiskState extends RiskInputs {
 }
 
 const MIN_SETUP_CONFIDENCE = 55;
-const MIN_PUBLISH_RISK_REWARD = 1.5;
+const MIN_PUBLISH_RISK_REWARD = 2.0;
 const MIN_RISK_REWARD = 2;
 const PREFERRED_RISK_REWARD = 3;
 const REJECTED_RISK_REASON = "Rejected because reward does not justify risk";

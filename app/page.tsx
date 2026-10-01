@@ -9,11 +9,17 @@ import MarketScenarios from "@/components/layout/MarketScenarios";
 import TradeSetupPanel from "@/components/layout/TradeSetupPanel";
 import AIPositionManager from "@/components/position-manager/AIPositionManager";
 import Watchlist from "@/components/watchlist/Watchlist";
+// Logic Accuracy — observation-only feature, no influence on live trading
+import AccuracyObserverInit from "@/components/accuracy/AccuracyObserverInit";
+import LogicAccuracyDashboard from "@/components/accuracy/LogicAccuracyDashboard";
 import styles from "./page.module.css";
 
 export default function Home() {
   return (
     <main className={styles.dashboard}>
+      {/* Starts the position-close observer; renders nothing visible */}
+      <AccuracyObserverInit />
+
       <Header />
 
       <div className={styles.workspace}>
@@ -32,6 +38,9 @@ export default function Home() {
               <MarketScenarios />
             </div>
           </section>
+
+          {/* Logic Accuracy Dashboard — observation only, no live trading influence */}
+          <LogicAccuracyDashboard />
         </section>
 
         <aside className={styles.centerColumn} aria-label="Trade setup and market analysis">

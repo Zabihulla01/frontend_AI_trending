@@ -25,6 +25,7 @@ import {
 } from "@/services/indicators";
 import { createBinanceKlineSocket } from "@/services/websocket";
 import { useIndicatorStore } from "@/store/useIndicatorStore";
+import { useMarketPriceStore } from "@/store/useMarketPriceStore";
 import { useMarketStore } from "@/store/useMarketStore";
 import { usePositionManagerStore } from "@/store/usePositionManagerStore";
 import { formatRiskInput, parseRiskNumber, useRiskStore } from "@/store/useRiskStore";
@@ -654,6 +655,11 @@ function TradingChart() {
     // Additive fan-out: the Position Manager reuses this chart stream and never alters chart, signal, or order logic.
     const positionManager = usePositionManagerStore.getState();
     positionManager.updateMarketPrice({ symbol, timeframe: interval, price: candle.close });
+
+    // Relay the live price to the market-price store so useSetupPhase can
+    // evaluate entry-zone proximity before any position is locked.
+    useMarketPriceStore.getState().setPrice(symbol, interval, candle.close);
+
     positionManager.processLiveCandle({
       symbol,
       timeframe: interval,
@@ -732,6 +738,7 @@ function TradingChart() {
       onError: () => {
         setIsLive(false);
         setSocketError("Live stream interrupted");
+        useMarketPriceStore.getState().setLiveStatus(symbol, interval, false);
       },
     });
 
@@ -743,6 +750,7 @@ function TradingChart() {
         window.clearTimeout(liveUpdateTimerRef.current);
         liveUpdateTimerRef.current = null;
       }
+      useMarketPriceStore.getState().setLiveStatus(symbol, interval, false);
     };
   }, [errorMessage, interval, isChartReady, isLoading, scheduleLiveCandle, symbol]);
 
