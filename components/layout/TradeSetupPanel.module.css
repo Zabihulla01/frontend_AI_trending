@@ -278,6 +278,12 @@
   font-weight: 700;
   letter-spacing: 0.14em;
 }
+
+.phase_expired {
+  color: #f87171;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+}
 /* stylelint-enable selector-class-pattern */
 
 .livePrice {
@@ -320,6 +326,40 @@
 .entryBanner p {
   margin-top: 2px;
   color: #a7f3d0;
+  font-size: 10px;
+  line-height: 1.4;
+}
+
+/* ── Expired / entry-missed banner ─────────────────────────────────────────── */
+
+.expiredBanner {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  border: 1px solid rgba(248, 113, 113, 0.38);
+  border-radius: 5px;
+  background: rgba(248, 113, 113, 0.08);
+  padding: 9px 10px;
+}
+
+.expiredBannerIcon {
+  flex: 0 0 auto;
+  font-size: 14px;
+  line-height: 1.3;
+}
+
+.expiredBanner strong {
+  display: block;
+  color: #fca5a5;
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.expiredBanner p {
+  margin-top: 2px;
+  color: #fecaca;
   font-size: 10px;
   line-height: 1.4;
 }

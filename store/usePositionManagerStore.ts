@@ -153,6 +153,29 @@ export const usePositionManagerStore = create<PositionManagerState>()(
           return null;
         }
 
+        // ── Last-line pre-entry expiry safety ────────────────────────────────
+        // Reject the lock if the live market price has already reached or
+        // passed TP1 in the profit direction, making the original entry stale.
+        //
+        // This is a last-resort guard.  The primary protection is the
+        // 'expired' phase gate in useSetupPhase / canLockTrade in
+        // TradeSetupPanel.  This guard catches any programmatic lockPosition()
+        // call that bypasses the UI layer.
+        //
+        // Active positions are exempt: this check only applies to fresh locks
+        // (the existing-ACTIVE early-return below handles the active case).
+        if (isValidPrice(input.currentPrice)) {
+          const livePrice = input.currentPrice;
+          const tp1ExpiryBreached =
+            input.direction === "LONG"
+              ? livePrice >= input.tp1   // LONG: price at or above TP1 = entry missed
+              : livePrice <= input.tp1;  // SHORT: price at or below TP1 = entry missed
+
+          if (tp1ExpiryBreached) {
+            return null;
+          }
+        }
+
         const key = createPositionKey(input.symbol, input.timeframe);
         const now = input.lockedAt ?? Date.now();
         const currentPrice = isValidPrice(input.currentPrice) ? input.currentPrice : input.entry;

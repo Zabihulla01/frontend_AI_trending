@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { parseRiskNumber, useRiskStore } from "@/store/useRiskStore";
 import { MARKET_PRICE_STALE_MS, useMarketPriceStore } from "@/store/useMarketPriceStore";
 
@@ -8,7 +8,7 @@ import { MARKET_PRICE_STALE_MS, useMarketPriceStore } from "@/store/useMarketPri
  * Pure observation hook — no side effects on any store.
  *
  * Reads:
- *   - useRiskStore: entry, stopLoss, action, atr, targetLocked
+ *   - useRiskStore: entry, stopLoss, action, atr, targetLocked, takeProfit (TP1)
  *     (structural setup geometry from completed-candle analysis)
  *   - useMarketPriceStore: live price keyed by symbol:interval
  *     (truly live WebSocket price from TradingChart)
@@ -19,6 +19,8 @@ import { MARKET_PRICE_STALE_MS, useMarketPriceStore } from "@/store/useMarketPri
  *   detected    — valid setup exists, price is outside the approach window
  *   approaching — price is within D_approach of entry, from the correct side
  *   triggered   — price has touched or crossed the entry level
+ *   expired     — live price reached/passed TP1 before the setup was locked
+ *                 (entry opportunity missed; sticky until a new setup identity)
  *
  * Threshold formulas:
  *   risk       = |entry - stopLoss|
@@ -26,9 +28,22 @@ import { MARKET_PRICE_STALE_MS, useMarketPriceStore } from "@/store/useMarketPri
  *
  * Long  approaching : currentPrice > entry  AND (currentPrice - entry) <= D_approach
  * Long  triggered   : currentPrice <= entry
+ * Long  expired     : currentPrice >= tp1  (sticky per setup identity)
  *
  * Short approaching : currentPrice < entry  AND (entry - currentPrice) <= D_approach
  * Short triggered   : currentPrice >= entry
+ * Short expired     : currentPrice <= tp1  (sticky per setup identity)
+ *
+ * Expiry is STICKY:
+ *   Once a setup's live price reaches TP1 without being locked, the 'expired'
+ *   phase latches for that specific setup identity (entry|sl|tp1|action).
+ *   If price later retraces, the setup stays expired.
+ *   Expiry resets only when a genuinely new setup is generated (setup identity
+ *   changes through the structural trigger flow in applyTradePlan).
+ *
+ * Active positions are exempt:
+ *   The hook receives isPositionActive from the caller. When true, the expiry
+ *   check is bypassed so locked trades proceed through normal TP/SL lifecycle.
  *
  * Stale detection:
  *   isPriceStale is true when nowMs - updatedAt > MARKET_PRICE_STALE_MS.
@@ -38,7 +53,7 @@ import { MARKET_PRICE_STALE_MS, useMarketPriceStore } from "@/store/useMarketPri
  *   staleness every second even when no WebSocket tick arrives.
  */
 
-export type SetupPhase = "none" | "detected" | "approaching" | "triggered";
+export type SetupPhase = "none" | "detected" | "approaching" | "triggered" | "expired";
 
 export interface SetupPhaseResult {
   /** Current lifecycle phase of the trade setup. */
@@ -70,6 +85,9 @@ export function useSetupPhase(symbol: string, interval: string): SetupPhaseResul
   // generated fresh levels, which resets the approach thresholds even when
   // the numeric entry/sl values happen to be identical to the previous setup.
   const targetLocked = useRiskStore((s) => s.targetLocked);
+  // TP1 is the pre-entry expiry boundary.  Once live price reaches TP1 before
+  // the trade is locked, the entry opportunity is considered missed.
+  const tp1Str       = useRiskStore((s) => s.takeProfit);
 
   // ── Live price ─────────────────────────────────────────────────────────────
   const priceEntry = useMarketPriceStore((s) => s.prices[key] ?? null);
@@ -79,7 +97,7 @@ export function useSetupPhase(symbol: string, interval: string): SetupPhaseResul
   // can consume it as a stable React value rather than calling Date.now()
   // directly (which is an impure call inside a memo).  The interval fires once
   // per second, bumping nowMs and therefore re-running the memo to re-evaluate
-  // staleness even when no new WebSocket tick arrives.
+  // staleness every second even when no new WebSocket tick arrives.
   const [nowMs, setNowMs] = useState(() => Date.now());
 
   useEffect(() => {
@@ -90,11 +108,25 @@ export function useSetupPhase(symbol: string, interval: string): SetupPhaseResul
     return () => clearInterval(id);
   }, []);
 
+  // ── Sticky expiry tracking ────────────────────────────────────────────────
+  // "Setup identity" encodes the structural geometry that defines the current
+  // setup.  It changes when applyTradePlan() regenerates levels (new entry,
+  // SL, TP1, or direction), which is the only legitimate reset event.
+  //
+  // Using a ref instead of state for the expiry flag prevents an extra render
+  // cycle: we mutate the ref inside the useMemo (synchronously during render)
+  // and then return the new phase immediately in the same render pass.  The
+  // ref is read and written only within useMemo, so there are no stale-closure
+  // issues and no rule-of-hooks violations.
+  const setupIdentity = `${entryPrice}|${stopLoss}|${tp1Str}|${action}`;
+  const expiredForSetupIdRef = useRef<string | null>(null);
+
   // ── Phase computation ─────────────────────────────────────────────────────
   return useMemo(() => {
     const entry        = parseRiskNumber(entryPrice);
     const sl           = parseRiskNumber(stopLoss);
     const atr          = parseRiskNumber(atrStr);
+    const tp1          = parseRiskNumber(tp1Str);
     const currentPrice = priceEntry?.price    ?? null;
     const updatedAt    = priceEntry?.updatedAt ?? null;
     const isLive       = priceEntry?.isLive    ?? false;
@@ -119,6 +151,12 @@ export function useSetupPhase(symbol: string, interval: string): SetupPhaseResul
       (action === "Long" || action === "Short");
 
     if (!hasValidSetup || currentPrice === null) {
+      // Reset expiry for invalid/absent setups so a brand-new setup starts
+      // clean.  This also covers the targetLocked=false path.
+      if (expiredForSetupIdRef.current !== null) {
+        expiredForSetupIdRef.current = null;
+      }
+
       return {
         phase: "none" as SetupPhase,
         currentPrice,
@@ -129,6 +167,13 @@ export function useSetupPhase(symbol: string, interval: string): SetupPhaseResul
       };
     }
 
+    // ── Setup identity reset ──────────────────────────────────────────────────
+    // When a new structural setup is generated (entry/SL/TP1/action changed),
+    // clear any prior expiry so the fresh setup starts in 'detected'.
+    if (expiredForSetupIdRef.current !== null && expiredForSetupIdRef.current !== setupIdentity) {
+      expiredForSetupIdRef.current = null;
+    }
+
     // ── Threshold derivation ──────────────────────────────────────────────────
     const risk       = Math.abs(entry - sl);
     const D_approach =
@@ -137,6 +182,40 @@ export function useSetupPhase(symbol: string, interval: string): SetupPhaseResul
         : risk * 0.5;
 
     const distanceToEntry = Math.abs(currentPrice - entry);
+
+    // ── Pre-entry expiry check (sticky, TP1 boundary) ────────────────────────
+    // Only applies before the trade is locked.  Active positions go through
+    // their normal TP/SL lifecycle in usePositionManagerStore — they are never
+    // marked expired here.
+    //
+    // Check happens before the approaching/triggered branches so that a price
+    // that has blown past TP1 cannot fall through to those phases.
+    const alreadyExpired = expiredForSetupIdRef.current === setupIdentity;
+
+    if (!alreadyExpired && tp1 !== null) {
+      // LONG: price reached or passed TP1 (upward)
+      // SHORT: price reached or passed TP1 (downward)
+      const tp1Crossed =
+        action === "Long"
+          ? currentPrice >= tp1
+          : currentPrice <= tp1;
+
+      if (tp1Crossed) {
+        // Latch expiry for this exact setup geometry.
+        expiredForSetupIdRef.current = setupIdentity;
+      }
+    }
+
+    if (expiredForSetupIdRef.current === setupIdentity) {
+      return {
+        phase: "expired" as SetupPhase,
+        currentPrice,
+        isLive,
+        isPriceStale,
+        approachDistance: D_approach,
+        distanceToEntry,
+      };
+    }
 
     // ── Long ──────────────────────────────────────────────────────────────────
     // Price travels from above (high) down toward entry.
@@ -213,5 +292,6 @@ export function useSetupPhase(symbol: string, interval: string): SetupPhaseResul
     // applyTradePlan regenerates a setup with the same numeric entry/sl,
     // targetLocked toggling false→true is the only signal that the geometry
     // is fresh and approach thresholds should reset.
-  }, [entryPrice, stopLoss, atrStr, action, targetLocked, priceEntry, nowMs]);
+    // tp1Str is included so expiry re-evaluates whenever TP1 changes (new setup).
+  }, [entryPrice, stopLoss, atrStr, action, targetLocked, tp1Str, priceEntry, nowMs, setupIdentity]);
 }

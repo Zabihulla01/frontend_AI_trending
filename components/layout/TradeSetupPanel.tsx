@@ -123,7 +123,19 @@ export default function TradeSetupPanel() {
     }),
     [entryPrice, stopLoss, takeProfit, takeProfit2]
   );
-  const canLockTrade = lockLevels.entry !== null && lockLevels.stopLoss !== null && lockLevels.tp1 !== null;
+  // canLockTrade now gates on both level availability AND phase.
+  // Lock Trade is only permitted when the setup is actionable:
+  //   - approaching: price is near entry — user is preparing
+  //   - triggered:   price has reached/crossed entry — time to enter
+  // DETECTED and EXPIRED do not allow locking.
+  const canLockTrade =
+    lockLevels.entry !== null &&
+    lockLevels.stopLoss !== null &&
+    lockLevels.tp1 !== null &&
+    (setupPhase.phase === "approaching" || setupPhase.phase === "triggered");
+  // Closed-candle lastClose — used only for Logic Accuracy snapshot.
+  // The truly live price for lockPosition comes from setupPhase.currentPrice
+  // (sourced from useMarketPriceStore via the WebSocket).
   const currentPrice = useMemo(() => {
     const latestAnalysis = analysisResults[interval as keyof typeof analysisResults];
 
@@ -183,6 +195,17 @@ export default function TradeSetupPanel() {
       return;
     }
 
+    // Double-check phase here as a UI-layer guard in case canLockTrade somehow
+    // became stale (e.g. React batching edge cases).
+    if (setupPhase.phase !== "approaching" && setupPhase.phase !== "triggered") {
+      return;
+    }
+
+    // Use the truly live WebSocket price (setupPhase.currentPrice from
+    // useMarketPriceStore) rather than the closed-candle lastClose.
+    // This is the last UI-layer check before lockPosition's own guard.
+    const livePrice = setupPhase.currentPrice;
+
     lockPosition({
       symbol,
       timeframe: interval,
@@ -191,7 +214,7 @@ export default function TradeSetupPanel() {
       stopLoss: lockLevels.stopLoss,
       tp1: lockLevels.tp1,
       tp2: lockLevels.tp2,
-      currentPrice: currentPrice ?? lockLevels.entry,
+      currentPrice: livePrice ?? lockLevels.entry,
       quantity: adjustedPositionSize > 0 ? adjustedPositionSize : undefined,
       lockedAt: Date.now(),
     });
@@ -255,6 +278,17 @@ export default function TradeSetupPanel() {
               <div>
                 <strong>Entry level reached</strong>
                 <p>Price has crossed the setup entry. Lock to begin monitoring.</p>
+              </div>
+            </div>
+          )}
+
+          {/* ── Entry missed / expired banner ──────────────────────────────────── */}
+          {setupPhase.phase === "expired" && !isPositionActive && (
+            <div className={styles.expiredBanner}>
+              <span className={styles.expiredBannerIcon}>⛔</span>
+              <div>
+                <strong>Entry Missed</strong>
+                <p>Price reached TP1 before the trade was locked. Waiting for a new setup.</p>
               </div>
             </div>
           )}
@@ -337,19 +371,30 @@ export default function TradeSetupPanel() {
 
           <p className={styles.reason}>Reason: {targetLockReason}</p>
 
-          {canLockTrade ? (
+          {/* ── Lock Trade action — rendered whenever levels exist ───────────── */}
+          {lockLevels.entry !== null && lockLevels.stopLoss !== null && lockLevels.tp1 !== null ? (
             <div className={styles.lockAction}>
               <button
                 type="button"
                 onClick={handleLockTrade}
-                disabled={isPositionActive}
-                className={`${styles.lockButton} ${isPositionActive ? styles.lockedButton : ""} ${isEntryTriggered ? styles.triggerButton : ""}`}
+                disabled={isPositionActive || !canLockTrade}
+                className={`${styles.lockButton} ${isPositionActive ? styles.lockedButton : ""} ${isEntryTriggered && canLockTrade ? styles.triggerButton : ""}`}
               >
-                {isPositionActive ? "Trade Locked" : isEntryTriggered ? "Enter Trade Now" : "Lock Trade"}
+                {isPositionActive
+                  ? "Trade Locked"
+                  : setupPhase.phase === "expired"
+                  ? "Entry Missed"
+                  : isEntryTriggered
+                  ? "Enter Trade Now"
+                  : "Lock Trade"}
               </button>
               <p className={styles.lockNote}>
                 {isPositionActive
                   ? "This setup snapshot is being monitored by the AI Position Manager."
+                  : setupPhase.phase === "expired"
+                  ? "This setup has expired. Waiting for a new structural setup."
+                  : setupPhase.phase === "detected"
+                  ? "Lock Trade becomes available when price approaches the entry zone."
                   : "Locks this setup for assistant-only monitoring. No order will be placed."}
               </p>
             </div>
